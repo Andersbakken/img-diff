@@ -1,136 +1,192 @@
 #include <QtGui>
 
-void usage(FILE *f)
-{
-    fprintf(f,
-            "img-diff [options...] imga imgb\n"
-            "  --verbose|-v                       Be verbose\n"
-            "  --threshold=[threshold]            Set threshold value\n");
-}
-
-bool cache = false;
-
-
+QString cache;
+int verbose = 0;
 struct Color
 {
     Color(const QColor &col = QColor())
-        : color(col), red(col.red()), green(col.green()), blue(col.blue()), alpha(col.alpha())
+        : red(col.red()), green(col.green()), blue(col.blue()), alpha(col.alpha())
     {}
 
     QString toString() const
     {
         char buf[1024];
-        snprintf(buf, sizeof(buf), "%02x%02x%02x%02x",
-                 color.red(),
-                 color.green(),
-                 color.blue(),
-                 color.alpha());
+        snprintf(buf, sizeof(buf), "%02x%02x%02x%02x", red, green, blue, alpha);
         return QString::fromLocal8Bit(buf);
     }
 
-    QColor color;
-    float red, green, blue;
-    quint8 alpha;
+    quint8 red, green, blue, alpha;
 };
+
+QDataStream &operator<<(QDataStream &ds, const Color &c)
+{
+    ds << c.red << c.green << c.blue << c.alpha;
+    return ds;
+}
+QDataStream &operator>>(QDataStream &ds, Color &col)
+{
+    quint8 tmp;
+    ds >> tmp;
+    col.red = static_cast<float>(tmp);
+    ds >> tmp;
+    col.green = static_cast<float>(tmp);
+    ds >> tmp;
+    col.blue = static_cast<float>(tmp);
+    ds >> col.alpha;
+    return ds;
+}
+
+QByteArray encode(int width, int height, bool allTransparent, const QVector<Color> &cols)
+{
+    QByteArray ret;
+    ret.resize(sizeof(width) + sizeof(height) + sizeof(allTransparent) + (cols.size() * sizeof(Color)));
+    char *ptr = ret.data();
+    *reinterpret_cast<int*>(ptr) = width;
+    *reinterpret_cast<int*>(ptr + sizeof(int)) = height;
+    *reinterpret_cast<int*>(ptr + sizeof(int) + sizeof(int)) = allTransparent;
+    memcpy(ptr + sizeof(int) + sizeof(int) + sizeof(bool), cols.constData(), sizeof(Color) * cols.size());
+    return ret;
+}
 
 struct Image {
     Image()
-        : width(0), height(0), allAlpha(false)
+        : width(0), height(0), allTransparent(false)
     {}
     QVector<Color> colors;
     int width, height;
-    bool allAlpha;
+    bool allTransparent;
+
+    Image sub(const QRect &subRect) const
+    {
+        if (!subRect.isNull() &&
+            (subRect.x() != 0 || subRect.y() != 0 || subRect.width() != width || subRect.height() != height)) {
+            QVector<Color> cols;
+            cols.reserve(subRect.width() * subRect.height());
+            bool allTransparent = true;
+            for (int y=subRect.y(); y<subRect.height() + subRect.y(); ++y) {
+                for (int x=subRect.x(); x<subRect.width() + subRect.x(); ++x) {
+                    const Color &c = colors.at((y * width) + x);
+                    if (allTransparent)
+                        allTransparent = !c.alpha;
+                    cols.append(c);
+                }
+            }
+            Image ret;
+            ret.colors = cols;
+            ret.width = subRect.width();
+            ret.height = subRect.height();
+            return ret;
+        }
+        return *this;
+    }
 };
 
-static void decodeImage(const QImage &image, QVector<Color> &cols, bool &allAlpha)
+
+QDataStream &operator<<(QDataStream &ds, const Image &image)
 {
-    const int w = image.width();
-    const int h = image.height();
-    cols.resize(w * h);
-    allAlpha = true;
-    for (int y=0; y<h; ++y) {
-        for (int x=0; x<w; ++x) {
-            Color &c = cols[x + (y * w)];
-            c = QColor::fromRgba(image.pixel(x, y));
-            if (allAlpha)
-                allAlpha = c.alpha == 0;
-        }
-    }
+    ds << image.colors << image.width << image.height << image.allTransparent;
+    return ds;
+}
+QDataStream &operator>>(QDataStream &ds, Image &image)
+{
+    ds >> image.colors >> image.width >> image.height >> image.allTransparent;
+    return ds;
 }
 
-
-static Image loadSubImage(const QString &file, const QRect &subRect)
+static Image load(const QString &file, const QRect &subRect)
 {
+    QString cacheFile;
+    if (!cache.isEmpty()) {
+        cacheFile = cache + "/" + QFileInfo(file).fileName() + ".cache";
+        QFile f(cacheFile);
+        if (f.open(QIODevice::ReadOnly)) {
+            if (verbose)
+                fprintf(stderr, "Read from cache %s\n", qPrintable(cacheFile));
+            Image ret;
+            QElapsedTimer timer;
+            timer.start();
+            QDataStream ds(&f);
+            ds >> ret;
+            qDebug() << timer.elapsed();
+            if (!subRect.isNull())
+                ret = ret.sub(subRect);
+            return ret;
+        }
+    }
     QImageReader reader(file);
     QImage image;
     reader.read(&image);
-    // if (!subRect.isNull())
-    //     reader.setClipRect(subRect);
-
-    // QImage image(file);
-    // qDebug() << image.pixel(0, 0);
-    // qDebug() << QColor(image.pixel(0, 0));
-    // qDebug() << image.format();
     if (image.isNull()) {
         qDebug() << "Couldn't decode" << file;
         return Image();
     }
-    // QSet<int> seen;
-    // for (int x=0; x<image.width(); ++x) {
-    //     for (int y=0; y<image.height(); ++y) {
-    //         int idx = image.pixelIndex(x, y);
-    //         if (!seen.contains(idx)) {
-    //             seen.insert(idx);
-    //             qDebug() << x << y << idx << image.pixel(x, y) << image.colorTable().at(idx)
-    //                      << QColor::fromRgba(image.colorTable().at(idx));
-    //         }
-    //     }
-    // }
 
-    // qDebug() << image.pixel(1, 1) << image.pixelIndex(1, 1) << image.colorTable();
+    if (!cache.isEmpty()) {
+        QFile file(cacheFile);
+        if (file.open(QIODevice::WriteOnly)) {
+            Image ret;
+            const int w = image.width();
+            const int h = image.height();
+            ret.colors.resize(w * h);
+            ret.allTransparent = true;
+            for (int y=0; y<h; ++y) {
+                for (int x=0; x<w; ++x) {
+                    Color &c = ret.colors[x + (y * w)];
+                    c = QColor::fromRgba(image.pixel(x, y));
+                    if (ret.allTransparent)
+                        ret.allTransparent = c.alpha == 0;
+                }
+            }
 
-    // if (image.format() != QImage::Format_ARGB32) {
-    //     QImage result(image.size(), QImage::Format_ARGB32);
-    //     {
-    //         QPainter p(&result);
-    //         p.fillRect(result.rect(), QColor(Qt::transparent));
-    //         p.setCompositionMode(QPainter::CompositionMode_SourceOver);
-    //         p.drawImage(0, 0, image);
-    //     }
-    //     // image.save("/tmp/balls1.png", "PNG");
-    //     image = result;
-    //     // result.save("/tmp/balls.png", "PNG");
-    //     // image = image.convertToFormat(QImage::Format_ARGB32);
-    // }
-
-    // qDebug() << image.pixel(1, 1) << QColor(image.pixel(1, 1));
-    // qDebug() << image.pixel(0, 0);
+            ret.width = image.width();
+            ret.height = image.height();
+            QDataStream ds(&file);
+            ds << ret;
+            if (!subRect.isNull())
+                ret = ret.sub(subRect);
+            if (verbose)
+                fprintf(stderr, "Wrote to cache %s\n", qPrintable(cacheFile));
+            return ret;
+        } else {
+            qDebug() << "Failed to open" << cacheFile << "for writing";
+        }
+    }
 
     if (!subRect.isNull() && subRect.size() != image.size()) {
         image = image.copy(subRect);
     }
     Image ret;
-    decodeImage(image, ret.colors, ret.allAlpha);
+    const int w = image.width();
+    const int h = image.height();
+    ret.colors.resize(w * h);
+    ret.allTransparent = true;
+    for (int y=0; y<h; ++y) {
+        for (int x=0; x<w; ++x) {
+            Color &c = ret.colors[x + (y * w)];
+            c = QColor::fromRgba(image.pixel(x, y));
+            if (ret.allTransparent)
+                ret.allTransparent = c.alpha == 0;
+        }
+    }
+
     ret.width = image.width();
     ret.height = image.height();
 
     return ret;
 }
 
-static Image loadSubImage(const QString &arg)
+static Image load(const QString &arg)
 {
     QRegExp rx("(.*):([0-9]+),([0-9]+)\\+([0-9]+)x([0-9]+)");
     if (rx.exactMatch(arg)) {
-        return loadSubImage(rx.cap(1), QRect(rx.cap(2).toInt(),
+        return load(rx.cap(1), QRect(rx.cap(2).toInt(),
                                              rx.cap(3).toInt(),
                                              rx.cap(4).toInt(),
                                              rx.cap(5).toInt()));
     } else {
-        return loadSubImage(arg, QRect());
+        return load(arg, QRect());
     }
 }
-
-int verbose = 0;
 
 static inline bool compare(const Image &needleData, int needleX, int needleY,
                            const Image &haystackData, int haystackX, int haystackY,
@@ -173,17 +229,22 @@ static inline bool compare(const Image &needleData, int needleX, int needleY,
     return ret;
 }
 
+void usage(FILE *f)
+{
+    fprintf(f,
+            "img-diff [options...] imga imgb\n"
+            "  --verbose|-v                       Be verbose\n"
+            "  --cache=[directory]                Use this directory for caches\n"
+            "  --threshold=[threshold]            Set threshold value\n");
+}
+
+
 int main(int argc, char **argv)
 {
-    // {
-    //     Color a(QColor(251, 1, 2, 255));
-    //     Color b(QColor(252, 0, 0, 255));
-    //     compare(a, b, 0);
-    //     return 0;
-    // }
     QCoreApplication a(argc, argv);
     Image needle, haystack;
     float threshold = 0;
+    QString needleString, haystackString;
     for (int i=1; i<argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
         if (arg == "--help" || arg == "-h") {
@@ -191,6 +252,12 @@ int main(int argc, char **argv)
             return 0;
         } else if (arg == "-v" || arg == "--verbose") {
             ++verbose;
+        } else if (arg.startsWith("--cache=")) {
+            cache = arg.mid(8);
+            if (!cache.isEmpty()) {
+                QDir dir;
+                dir.mkpath(cache);
+            }
         } else if (arg.startsWith("--threshold=")) {
             bool ok;
             QString t = arg.mid(12);
@@ -212,31 +279,38 @@ int main(int argc, char **argv)
             // if (arg.endsWith("%")) {
             //     qDebug() << "foobar" << arg << threshold;
             // }
-        } else if (!needle.colors.size()) {
-            needle = loadSubImage(arg);
-            if (!needle.colors.size()) {
-                fprintf(stderr, "Failed to decode needle\n");
-                return 1;
-            }
-            if (needle.allAlpha) {
-                printf("0,0+0x0\n");
-                return 0;
-            }
-        } else if (!haystack.colors.size()) {
-            haystack = loadSubImage(arg);
-            if (!haystack.colors.size()) {
-                fprintf(stderr, "Failed to decode haystack\n");
-                return 1;
-            }
+        } else if (needleString.isEmpty()) {
+            needleString = arg;
+        } else if (haystackString.isEmpty()) {
+            haystackString = arg;
         } else {
             usage(stderr);
             fprintf(stderr, "Too many args\n");
             return 1;
         }
     }
-    if (!needle.colors.size() || !haystack.colors.size()) {
+    if (haystackString.isEmpty() || needleString.isEmpty()) {
         usage(stderr);
         fprintf(stderr, "Not enough args\n");
+        return 1;
+    }
+
+    needle = load(needleString);
+    if (!needle.colors.size()) {
+        fprintf(stderr, "Failed to decode needle\n");
+        return 1;
+    }
+    if (needle.allTransparent) {
+        printf("0,0+0x0\n");
+        return 0;
+    }
+
+    haystack = load(haystackString);
+    if (!haystack.colors.size()) {
+        fprintf(stderr, "Failed to decode haystack\n");
+        return 1;
+    }
+    if (haystack.allTransparent) {
         return 1;
     }
 
