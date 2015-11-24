@@ -52,8 +52,8 @@ struct Image
         ret->mWidth = ret->read<int>(Width);
         ret->mHeight = ret->read<int>(Height);
         ret->mAllTransparent = ret->read<bool>(AllTransparent);
-        ret->mSubRect = subRect;
-        ret->mSubRect.intersect(QRect(0, 0, ret->mWidth, ret->mHeight));
+        if (!subRect.isNull())
+            ret->mSubRect = subRect.intersected(QRect(0, 0, ret->mWidth, ret->mHeight));
         if (!ret->mSubRect.isNull()) {
             if (verbose)
                 qDebug() << "Using subrect:" << ret->mSubRect << QRect(0, 0, ret->mWidth, ret->mHeight) << subRect;
@@ -86,7 +86,16 @@ struct Image
             x += mSubRect.x();
             y += mSubRect.y();
         }
-        return read<Color>(Colors + (x + (y * mWidth)) * sizeof(Color));
+// #ifdef NDEBUG
+        if (x < 0 || x >= mWidth || y < 0 || y >= mHeight) {
+            qDebug() << "bad coords" << x << y << mWidth << mHeight << mSubRect;
+        }
+// #endif
+        assert(x < mWidth);
+        assert(y < mHeight);
+        assert(x >= 0);
+        assert(y >= 0);
+        return read<Color>(Colors + ((x + (y * mWidth)) * sizeof(Color)));
     }
 
     int width() const { return mSubRect.isNull() ? mWidth : mSubRect.width(); }
