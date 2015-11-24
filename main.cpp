@@ -8,11 +8,64 @@ void usage(FILE *f)
             "  --threshold=[threshold]            Set threshold value\n");
 }
 
-static QImage loadSubImage(const QString &file, const QRect &subRect)
+bool cache = false;
+
+
+struct Color
+{
+    Color(const QColor &col = QColor())
+        : color(col), red(col.red()), green(col.green()), blue(col.blue()), alpha(col.alpha())
+    {}
+
+    QString toString() const
+    {
+        char buf[1024];
+        snprintf(buf, sizeof(buf), "%02x%02x%02x%02x",
+                 color.red(),
+                 color.green(),
+                 color.blue(),
+                 color.alpha());
+        return QString::fromLocal8Bit(buf);
+    }
+
+    QColor color;
+    float red, green, blue;
+    quint8 alpha;
+};
+
+struct Image {
+    Image()
+        : width(0), height(0), allAlpha(false)
+    {}
+    QVector<Color> colors;
+    int width, height;
+    bool allAlpha;
+};
+
+static void decodeImage(const QImage &image, QVector<Color> &cols, bool &allAlpha)
+{
+    const int w = image.width();
+    const int h = image.height();
+    cols.resize(w * h);
+    allAlpha = true;
+    for (int y=0; y<h; ++y) {
+        for (int x=0; x<w; ++x) {
+            Color &c = cols[x + (y * w)];
+            c = QColor::fromRgba(image.pixel(x, y));
+            if (allAlpha)
+                allAlpha = c.alpha == 0;
+        }
+    }
+}
+
+
+static Image loadSubImage(const QString &file, const QRect &subRect)
 {
     QImageReader reader(file);
     QImage image;
     reader.read(&image);
+    // if (!subRect.isNull())
+    //     reader.setClipRect(subRect);
 
     // QImage image(file);
     // qDebug() << image.pixel(0, 0);
@@ -20,7 +73,7 @@ static QImage loadSubImage(const QString &file, const QRect &subRect)
     // qDebug() << image.format();
     if (image.isNull()) {
         qDebug() << "Couldn't decode" << file;
-        return image;
+        return Image();
     }
     // QSet<int> seen;
     // for (int x=0; x<image.width(); ++x) {
@@ -53,12 +106,18 @@ static QImage loadSubImage(const QString &file, const QRect &subRect)
     // qDebug() << image.pixel(1, 1) << QColor(image.pixel(1, 1));
     // qDebug() << image.pixel(0, 0);
 
-    if (!image.isNull() && !subRect.isNull())
-        return image.copy(subRect);
-    return image;
+    if (!subRect.isNull() && subRect.size() != image.size()) {
+        image = image.copy(subRect);
+    }
+    Image ret;
+    decodeImage(image, ret.colors, ret.allAlpha);
+    ret.width = image.width();
+    ret.height = image.height();
+
+    return ret;
 }
 
-static QImage loadSubImage(const QString &arg)
+static Image loadSubImage(const QString &arg)
 {
     QRegExp rx("(.*):([0-9]+),([0-9]+)\\+([0-9]+)x([0-9]+)");
     if (rx.exactMatch(arg)) {
@@ -68,49 +127,6 @@ static QImage loadSubImage(const QString &arg)
                                              rx.cap(5).toInt()));
     } else {
         return loadSubImage(arg, QRect());
-    }
-}
-
-struct Color
-{
-    Color(const QColor &col = QColor())
-        : color(col), red(col.red()), green(col.green()), blue(col.blue()), alpha(col.alpha())
-    {}
-
-    QString toString() const
-    {
-        char buf[1024];
-        snprintf(buf, sizeof(buf), "%02x%02x%02x%02x",
-                 color.red(),
-                 color.green(),
-                 color.blue(),
-                 color.alpha());
-        return QString::fromLocal8Bit(buf);
-    }
-
-    QColor color;
-    float red, green, blue;
-    quint8 alpha;
-};
-
-struct Image {
-    QVector<Color> colors;
-    int width, height;
-};
-
-static void decodeImage(const QImage &image, QVector<Color> &cols, bool &allAlpha)
-{
-    const int w = image.width();
-    const int h = image.height();
-    cols.resize(w * h);
-    allAlpha = true;
-    for (int y=0; y<h; ++y) {
-        for (int x=0; x<w; ++x) {
-            Color &c = cols[x + (y * w)];
-            c = QColor::fromRgba(image.pixel(x, y));
-            if (allAlpha)
-                allAlpha = c.alpha == 0;
-        }
     }
 }
 
@@ -166,42 +182,50 @@ int main(int argc, char **argv)
     //     return 0;
     // }
     QCoreApplication a(argc, argv);
-    QImage needle, haystack;
-    Image needleData, haystackData;
+    Image needle, haystack;
     float threshold = 0;
-    bool needleAllAlpha = false;
     for (int i=1; i<argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
-        if (needle.isNull()) {
-            needle = loadSubImage(arg);
-            if (needle.isNull()) {
-                fprintf(stderr, "Failed to decode needle\n");
-                return 1;
-            }
-            decodeImage(needle, needleData.colors, needleAllAlpha);
-            needleData.width = needle.width();
-            needleData.height = needle.height();
-        } else if (haystack.isNull()) {
-            haystack = loadSubImage(arg);
-            if (haystack.isNull()) {
-                fprintf(stderr, "Failed to decode haystack\n");
-                return 1;
-            }
-            bool ignored;
-            decodeImage(haystack, haystackData.colors, ignored);
-            haystackData.width = haystack.width();
-            haystackData.height = haystack.height();
-        } else if (arg == "--help" || arg == "-h") {
+        if (arg == "--help" || arg == "-h") {
             usage(stdout);
             return 0;
         } else if (arg == "-v" || arg == "--verbose") {
             ++verbose;
         } else if (arg.startsWith("--threshold=")) {
             bool ok;
-            threshold = arg.mid(12).toFloat(&ok);
+            QString t = arg.mid(12);
+            bool percent = false;
+            if (t.endsWith("%")) {
+                t.chop(1);
+                percent = true;
+            }
+            threshold = t.toFloat(&ok);
             if (!ok || threshold < .0) {
                 fprintf(stderr, "Invalid threshold (%s), must be positive float value\n",
                         qPrintable(arg.mid(12)));
+                return 1;
+            }
+            if (percent) {
+                threshold *= 100;
+                threshold /= 256;
+            }
+            // if (arg.endsWith("%")) {
+            //     qDebug() << "foobar" << arg << threshold;
+            // }
+        } else if (!needle.colors.size()) {
+            needle = loadSubImage(arg);
+            if (needle.colors.size()) {
+                fprintf(stderr, "Failed to decode needle\n");
+                return 1;
+            }
+            if (needle.allAlpha) {
+                printf("0,0+0x0\n");
+                return 0;
+            }
+        } else if (!haystack.colors.size()) {
+            haystack = loadSubImage(arg);
+            if (!haystack.colors.size()) {
+                fprintf(stderr, "Failed to decode haystack\n");
                 return 1;
             }
         } else {
@@ -210,42 +234,38 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-    if (needle.isNull() || haystack.isNull()) {
+    if (!needle.colors.size() || !haystack.colors.size()) {
         usage(stderr);
         fprintf(stderr, "Not enough args\n");
         return 1;
     }
-    if (needleAllAlpha) {
-        printf("0,0+0x0\n");
-        return 0;
-    }
 
     if (verbose >= 3) {
-        fprintf(stderr, "NEEDLE %dx%d", needleData.width, needleData.height);
-        for (int i=0; i<needleData.colors.size(); ++i) {
-            if (i % needleData.width == 0) {
+        fprintf(stderr, "NEEDLE %dx%d", needle.width, needle.height);
+        for (int i=0; i<needle.colors.size(); ++i) {
+            if (i % needle.width == 0) {
                 fprintf(stderr, "\n");
             } else {
                 fprintf(stderr, " ");
             }
-            fprintf(stderr, "%s ", qPrintable(needleData.colors.at(i).toString()));
+            fprintf(stderr, "%s ", qPrintable(needle.colors.at(i).toString()));
         }
-         fprintf(stderr, "\nHAYSTACK %dx%d", haystackData.width, haystackData.height);
-        for (int i=0; i<haystackData.colors.size(); ++i) {
-            if (i % haystackData.width == 0) {
+        fprintf(stderr, "\nHAYSTACK %dx%d", haystack.width, haystack.height);
+        for (int i=0; i<haystack.colors.size(); ++i) {
+            if (i % haystack.width == 0) {
                 fprintf(stderr, "\n");
             } else {
                 fprintf(stderr, " ");
             }
-            fprintf(stderr, "%s ", qPrintable(haystackData.colors.at(i).toString()));
+            fprintf(stderr, "%s ", qPrintable(haystack.colors.at(i).toString()));
         }
         fprintf(stderr, "\n");
     }
 
-    const int nw = needle.width();
-    const int nh = needle.height();
-    const int hw = haystack.width();
-    const int hh = haystack.height();
+    const int nw = needle.width;
+    const int nh = needle.height;
+    const int hw = haystack.width;
+    const int hh = haystack.height;
     if (nw > hw) {
         usage(stderr);
         fprintf(stderr, "Bad rects\n");
@@ -265,8 +285,8 @@ int main(int argc, char **argv)
             bool ok = true;
             for (int xx=0; xx<nw && ok; ++xx) {
                 for (int yy=0; yy<nh; ++yy) {
-                    if (!compare(needleData, xx, yy,
-                                 haystackData, x + xx, y + yy,
+                    if (!compare(needle, xx, yy,
+                                 haystack, x + xx, y + yy,
                                  threshold)) {
                         ok = false;
                         break;
@@ -280,6 +300,7 @@ int main(int argc, char **argv)
         }
     }
 
-    fprintf(stderr, "Couldn't find area\n");
+    if (verbose)
+        fprintf(stderr, "Couldn't find area\n");
     return 1;
 }
