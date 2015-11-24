@@ -10,10 +10,35 @@ void usage(FILE *f)
 
 static QImage loadSubImage(const QString &file, const QRect &subRect)
 {
-    QImage image(file);
-    if (image.format() != QImage::Format_ARGB32) {
-        image = image.convertToFormat(QImage::Format_ARGB32);
+    QImageReader reader(file);
+    QImage image;
+    reader.read(&image);
+
+    // QImage image(file);
+    // qDebug() << image.pixel(0, 0);
+    // qDebug() << QColor(image.pixel(0, 0));
+    // qDebug() << image.format();
+    if (image.isNull()) {
+        qDebug() << "Couldn't decode" << file;
+        return image;
     }
+    if (image.format() != QImage::Format_ARGB32) {
+        QImage result(image.size(), QImage::Format_ARGB32);
+        {
+            QPainter p(&result);
+            p.fillRect(result.rect(), QColor(Qt::transparent));
+            p.setCompositionMode(QPainter::CompositionMode_Source);
+            p.drawImage(0, 0, image);
+        }
+        // image.save("/tmp/balls1.png", "PNG");
+        image = result;
+        // result.save("/tmp/balls.png", "PNG");
+        // image = image.convertToFormat(QImage::Format_ARGB32);
+    }
+
+    // qDebug() << image.pixel(0, 0);
+    // qDebug() << QColor(image.pixel(0, 0));
+
     if (!image.isNull() && !subRect.isNull())
         return image.copy(subRect);
     return image;
@@ -181,6 +206,28 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (verbose >= 3) {
+        fprintf(stderr, "NEEDLE %dx%d", needleData.width, needleData.height);
+        for (int i=0; i<needleData.colors.size(); ++i) {
+            if (i % needleData.width == 0) {
+                fprintf(stderr, "\n");
+            } else {
+                fprintf(stderr, " ");
+            }
+            fprintf(stderr, "%s ", qPrintable(needleData.colors.at(i).toString()));
+        }
+         fprintf(stderr, "\nHAYSTACK %dx%d", haystackData.width, haystackData.height);
+        for (int i=0; i<haystackData.colors.size(); ++i) {
+            if (i % haystackData.width == 0) {
+                fprintf(stderr, "\n");
+            } else {
+                fprintf(stderr, " ");
+            }
+            fprintf(stderr, "%s ", qPrintable(haystackData.colors.at(i).toString()));
+        }
+        fprintf(stderr, "\n");
+    }
+
     const int nw = needle.width();
     const int nh = needle.height();
     const int hw = haystack.width();
@@ -197,9 +244,9 @@ int main(int argc, char **argv)
     }
 
     // qDebug() << nw << nh << hw << hh;
-    for (int x=0; x<hw - nw; ++x) {
+    for (int x=0; x<=hw - nw; ++x) {
         // qDebug() << "shit" << x;
-        for (int y=0; y<hh - nh; ++y) {
+        for (int y=0; y<=hh - nh; ++y) {
             // qDebug() << "balls" << y;
             bool ok = true;
             for (int xx=0; xx<nw && ok; ++xx) {
