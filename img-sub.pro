@@ -3,9 +3,10 @@
 ######################################################################
 
 TEMPLATE = app
-TARGET = 
+TARGET =
 DEPENDPATH += .
 INCLUDEPATH += .
 
 # Input
 SOURCES += main.cpp
+QMAKE_CXXFLAGS = -std=c++11

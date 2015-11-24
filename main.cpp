@@ -1,6 +1,15 @@
 #include <QtGui>
+#include <memory>
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <assert.h>
 
-QString cache;
+QString cache = "/tmp/img-sub-cache/";
 int verbose = 0;
 struct Color
 {
@@ -18,182 +27,189 @@ struct Color
     quint8 red, green, blue, alpha;
 };
 
-QDataStream &operator<<(QDataStream &ds, const Color &c)
+struct Image
 {
-    ds << c.red << c.green << c.blue << c.alpha;
-    return ds;
-}
-QDataStream &operator>>(QDataStream &ds, Color &col)
-{
-    quint8 tmp;
-    ds >> tmp;
-    col.red = static_cast<float>(tmp);
-    ds >> tmp;
-    col.green = static_cast<float>(tmp);
-    ds >> tmp;
-    col.blue = static_cast<float>(tmp);
-    ds >> col.alpha;
-    return ds;
-}
-
-QByteArray encode(int width, int height, bool allTransparent, const QVector<Color> &cols)
-{
-    QByteArray ret;
-    ret.resize(sizeof(width) + sizeof(height) + sizeof(allTransparent) + (cols.size() * sizeof(Color)));
-    char *ptr = ret.data();
-    *reinterpret_cast<int*>(ptr) = width;
-    *reinterpret_cast<int*>(ptr + sizeof(int)) = height;
-    *reinterpret_cast<int*>(ptr + sizeof(int) + sizeof(int)) = allTransparent;
-    memcpy(ptr + sizeof(int) + sizeof(int) + sizeof(bool), cols.constData(), sizeof(Color) * cols.size());
-    return ret;
-}
-
-struct Image {
-    Image()
-        : width(0), height(0), allTransparent(false)
-    {}
-    QVector<Color> colors;
-    int width, height;
-    bool allTransparent;
-
-    Image sub(const QRect &subRect) const
+    static std::shared_ptr<Image> load(const std::string &fileName, const QRect &subRect)
     {
-        if (!subRect.isNull() &&
-            (subRect.x() != 0 || subRect.y() != 0 || subRect.width() != width || subRect.height() != height)) {
-            QVector<Color> cols;
-            cols.reserve(subRect.width() * subRect.height());
-            bool allTransparent = true;
-            for (int y=subRect.y(); y<subRect.height() + subRect.y(); ++y) {
-                for (int x=subRect.x(); x<subRect.width() + subRect.x(); ++x) {
-                    const Color &c = colors.at((y * width) + x);
-                    if (allTransparent)
-                        allTransparent = !c.alpha;
-                    cols.append(c);
+        int fd = open(fileName.c_str(), O_RDONLY);
+        if (fd == -1) {
+            return std::shared_ptr<Image>();
+        }
+        struct stat st;
+        if (fstat(fd, &st) == -1) {
+            ::close(fd);
+            return std::shared_ptr<Image>();
+        }
+        void *data = mmap(0, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (!data) {
+            ::close(fd);
+            return std::shared_ptr<Image>();
+        }
+        std::shared_ptr<Image> ret(new Image);
+        ret->mData = data;
+        ret->mFD = fd;
+        ret->mMappedLength = st.st_size;
+        ret->mWidth = ret->read<int>(Width);
+        ret->mHeight = ret->read<int>(Height);
+        ret->mAllTransparent = ret->read<bool>(AllTransparent);
+        ret->mSubRect = subRect;
+        if (!subRect.isNull()) {
+            if (!QRect(0, 0, ret->mWidth, ret->mHeight).contains(subRect)) {
+                qDebug() << "Invalid subrect" << QRect(0, 0, ret->mWidth, ret->mHeight) << subRect;
+                return std::shared_ptr<Image>();
+            }
+            ret->mAllTransparent = true;
+            const int height = subRect.height();
+            const int width = subRect.width();
+            for (int y=0; ret->mAllTransparent && y<height; ++y) {
+                for (int x=0; x<width; ++x) {
+                    // qDebug() << x << y << ret->color(x, y).toString() << subRect;
+                    // qDebug() << x << y << width << height << subRect << ret->mWidth << ret->mHeight;
+                    if (ret->color(x, y).alpha) {
+                        ret->mAllTransparent = false;
+                        break;
+                    }
                 }
             }
-            Image ret;
-            ret.colors = cols;
-            ret.width = subRect.width();
-            ret.height = subRect.height();
-            return ret;
         }
-        return *this;
+        return ret;
     }
+
+    ~Image()
+    {
+        assert(mData);
+        munmap(mData, mMappedLength);
+    }
+
+    Color color(int x, int y) const
+    {
+        if (!mSubRect.isNull()) {
+            x += mSubRect.x();
+            y += mSubRect.y();
+        }
+        return read<Color>(Colors + (x + (y * mWidth)) * sizeof(Color));
+    }
+
+    int width() const { return mSubRect.isNull() ? mWidth : mSubRect.width(); }
+    int height() const { return mSubRect.isNull() ? mHeight : mSubRect.height(); }
+    bool allTransparent() const { return mAllTransparent; }
+    QRect subRect() const { return mSubRect; }
+private:
+    Image()
+        : mData(0), mMappedLength(0), mFD(-1), mWidth(0), mHeight(0), mAllTransparent(false)
+    {}
+    enum Offset {
+        Width = 0,
+        Height = sizeof(int),
+        AllTransparent = Height + sizeof(int),
+        Colors = AllTransparent + sizeof(bool)
+    };
+    template <typename T> T read(int offset) const
+    {
+        assert(offset < mMappedLength);
+        T ret;
+        memcpy(&ret, static_cast<const unsigned char *>(mData) + offset, sizeof(T));
+        return ret;
+    }
+
+    void *mData;
+    int mMappedLength;
+    int mFD;
+    int mWidth, mHeight;
+    bool mAllTransparent;
+    QRect mSubRect;
 };
 
+static inline bool writeColors(const QVector<Color> &cols, FILE *f)
+{
+    return fwrite(cols.constData(), sizeof(Color) * cols.size(), 1, f);
+    // bool first = false;
+    // int idx = 0;
+    // for (QVector<Color>::const_iterator it = cols.begin(); it != cols.end(); ++it) {
+    //     const Color &col = *it;
+    //     if (col.alpha && !first) {
+    //         first = true;
+    //         const unsigned char *shitshit = reinterpret_cast<const unsigned char *>(&col);
+    //         for (int i=0; i<8; ++i) {
+    //             printf("0x%x ", shitshit[i]);
+    //         }
+    //         printf("\n");
 
-QDataStream &operator<<(QDataStream &ds, const Image &image)
-{
-    ds << image.colors << image.width << image.height << image.allTransparent;
-    return ds;
-}
-QDataStream &operator>>(QDataStream &ds, Image &image)
-{
-    ds >> image.colors >> image.width >> image.height >> image.allTransparent;
-    return ds;
+    //     }
+    //     if (!fwrite(&col, sizeof(Color), 1, f))
+    //         return false;
+
+    //     ++idx;
+    // }
+    // return true;
 }
 
-static Image load(const QString &file, const QRect &subRect)
+static std::shared_ptr<Image> load(const QString &file, const QRect &subRect)
 {
-    QString cacheFile;
-    if (!cache.isEmpty()) {
-        cacheFile = cache + "/" + QFileInfo(file).fileName() + ".cache";
-        QFile f(cacheFile);
-        if (f.open(QIODevice::ReadOnly)) {
-            if (verbose)
-                fprintf(stderr, "Read from cache %s\n", qPrintable(cacheFile));
-            Image ret;
-            QElapsedTimer timer;
-            timer.start();
-            QDataStream ds(&f);
-            ds >> ret;
-            qDebug() << timer.elapsed();
-            if (!subRect.isNull())
-                ret = ret.sub(subRect);
-            return ret;
-        }
-    }
+    const QString cacheFile = cache + "/" + QFileInfo(file).fileName() + ".cache";
+    std::shared_ptr<Image> img = Image::load(cacheFile.toStdString(), subRect);
+    if (img)
+        return img;
     QImageReader reader(file);
     QImage image;
     reader.read(&image);
     if (image.isNull()) {
         qDebug() << "Couldn't decode" << file;
-        return Image();
+        return std::shared_ptr<Image>();
     }
 
-    if (!cache.isEmpty()) {
-        QFile file(cacheFile);
-        if (file.open(QIODevice::WriteOnly)) {
-            Image ret;
-            const int w = image.width();
-            const int h = image.height();
-            ret.colors.resize(w * h);
-            ret.allTransparent = true;
-            for (int y=0; y<h; ++y) {
-                for (int x=0; x<w; ++x) {
-                    Color &c = ret.colors[x + (y * w)];
-                    c = QColor::fromRgba(image.pixel(x, y));
-                    if (ret.allTransparent)
-                        ret.allTransparent = c.alpha == 0;
-                }
-            }
-
-            ret.width = image.width();
-            ret.height = image.height();
-            QDataStream ds(&file);
-            ds << ret;
-            if (!subRect.isNull())
-                ret = ret.sub(subRect);
-            if (verbose)
-                fprintf(stderr, "Wrote to cache %s\n", qPrintable(cacheFile));
-            return ret;
-        } else {
-            qDebug() << "Failed to open" << cacheFile << "for writing";
-        }
+    FILE *f = fopen(qPrintable(cacheFile), "w");
+    if (!f) {
+        qDebug() << "Couldn't open file for writing" << cacheFile;
+        return std::shared_ptr<Image>();
     }
 
-    if (!subRect.isNull() && subRect.size() != image.size()) {
-        image = image.copy(subRect);
-    }
-    Image ret;
-    const int w = image.width();
-    const int h = image.height();
-    ret.colors.resize(w * h);
-    ret.allTransparent = true;
+    int w = image.width(), h = image.height();
+    bool allTransparent = true;
+    QVector<Color> colors(w * h);
     for (int y=0; y<h; ++y) {
         for (int x=0; x<w; ++x) {
-            Color &c = ret.colors[x + (y * w)];
+            Color &c = colors[x + (y * w)];
             c = QColor::fromRgba(image.pixel(x, y));
-            if (ret.allTransparent)
-                ret.allTransparent = c.alpha == 0;
+            if (allTransparent) {
+                allTransparent = c.alpha == 0;
+            }
         }
     }
 
-    ret.width = image.width();
-    ret.height = image.height();
+    if (!fwrite(&w, sizeof(int), 1, f)
+        || !fwrite(&h, sizeof(int), 1, f)
+        || !fwrite(&allTransparent, sizeof(bool), 1, f)
+        || !writeColors(colors, f)) {
+        fclose(f);
+        unlink(qPrintable(cacheFile));
+        qDebug() << "Failed to write" << cacheFile << errno;
+        return std::shared_ptr<Image>();
+    }
+    fclose(f);
 
-    return ret;
+    return Image::load(cacheFile.toStdString(), subRect);
 }
 
-static Image load(const QString &arg)
+static std::shared_ptr<Image> load(const QString &arg)
 {
     QRegExp rx("(.*):([0-9]+),([0-9]+)\\+([0-9]+)x([0-9]+)");
     if (rx.exactMatch(arg)) {
         return load(rx.cap(1), QRect(rx.cap(2).toInt(),
-                                             rx.cap(3).toInt(),
-                                             rx.cap(4).toInt(),
-                                             rx.cap(5).toInt()));
+                                     rx.cap(3).toInt(),
+                                     rx.cap(4).toInt(),
+                                     rx.cap(5).toInt()));
     } else {
         return load(arg, QRect());
     }
 }
 
-static inline bool compare(const Image &needleData, int needleX, int needleY,
-                           const Image &haystackData, int haystackX, int haystackY,
+static inline bool compare(const std::shared_ptr<Image> &needleData, int needleX, int needleY,
+                           const std::shared_ptr<Image> &haystackData, int haystackX, int haystackY,
                            float threshold)
 {
-    const Color &needle = needleData.colors.at(needleX + (needleY * needleData.width));
-    const Color &haystack = haystackData.colors.at(haystackX + (haystackY * haystackData.width));
+    const Color needle = needleData->color(needleX, needleY);
+    const Color haystack = haystackData->color(haystackX, haystackY);
     const float red = powf(haystack.red - needle.red, 2);
     const float green = powf(haystack.green - needle.green, 2);
     const float blue = powf(haystack.blue - needle.blue, 2);
@@ -234,7 +250,7 @@ void usage(FILE *f)
     fprintf(f,
             "img-diff [options...] imga imgb\n"
             "  --verbose|-v                       Be verbose\n"
-            "  --cache=[directory]                Use this directory for caches\n"
+            "  --cache=[directory]                Use this directory for caches (default \"/tmp/img-sub-cache/\") \n"
             "  --threshold=[threshold]            Set threshold value\n");
 }
 
@@ -242,7 +258,7 @@ void usage(FILE *f)
 int main(int argc, char **argv)
 {
     QCoreApplication a(argc, argv);
-    Image needle, haystack;
+    std::shared_ptr<Image> needle, haystack;
     float threshold = 0;
     QString needleString, haystackString;
     for (int i=1; i<argc; ++i) {
@@ -273,12 +289,11 @@ int main(int argc, char **argv)
                 return 1;
             }
             if (percent) {
-                threshold *= 100;
-                threshold /= 256;
+                threshold /= 100;
+                threshold *= 256;
             }
-            // if (arg.endsWith("%")) {
-            //     qDebug() << "foobar" << arg << threshold;
-            // }
+            if (verbose)
+                qDebug() << "threshold:" << threshold;
         } else if (needleString.isEmpty()) {
             needleString = arg;
         } else if (haystackString.isEmpty()) {
@@ -296,50 +311,52 @@ int main(int argc, char **argv)
     }
 
     needle = load(needleString);
-    if (!needle.colors.size()) {
+    if (!needle) {
         fprintf(stderr, "Failed to decode needle\n");
         return 1;
     }
-    if (needle.allTransparent) {
+    if (needle->allTransparent()) {
         printf("0,0+0x0\n");
         return 0;
     }
 
     haystack = load(haystackString);
-    if (!haystack.colors.size()) {
+    if (!haystack) {
         fprintf(stderr, "Failed to decode haystack\n");
         return 1;
     }
-    if (haystack.allTransparent) {
+    if (haystack->allTransparent()) {
         return 1;
     }
 
     if (verbose >= 3) {
-        fprintf(stderr, "NEEDLE %dx%d", needle.width, needle.height);
-        for (int i=0; i<needle.colors.size(); ++i) {
-            if (i % needle.width == 0) {
-                fprintf(stderr, "\n");
-            } else {
-                fprintf(stderr, " ");
+        fprintf(stderr, "NEEDLE %dx%d", needle->width(), needle->height());
+
+        int height = needle->height();
+        int width = needle->width();
+        for (int y=0; y<height; ++y) {
+            for (int x=0; x<width; ++x) {
+                printf("%s ", qPrintable(needle->color(x, y).toString()));
             }
-            fprintf(stderr, "%s ", qPrintable(needle.colors.at(i).toString()));
+            printf("\n");
         }
-        fprintf(stderr, "\nHAYSTACK %dx%d", haystack.width, haystack.height);
-        for (int i=0; i<haystack.colors.size(); ++i) {
-            if (i % haystack.width == 0) {
-                fprintf(stderr, "\n");
-            } else {
-                fprintf(stderr, " ");
+
+        fprintf(stderr, "HAYSTACK %dx%d", haystack->width(), haystack->height());
+
+        height = haystack->height();
+        width = haystack->width();
+        for (int y=0; y<height; ++y) {
+            for (int x=0; x<width; ++x) {
+                printf("%s ", qPrintable(haystack->color(x, y).toString()));
             }
-            fprintf(stderr, "%s ", qPrintable(haystack.colors.at(i).toString()));
+            printf("\n");
         }
-        fprintf(stderr, "\n");
     }
 
-    const int nw = needle.width;
-    const int nh = needle.height;
-    const int hw = haystack.width;
-    const int hh = haystack.height;
+    const int nw = needle->width();
+    const int nh = needle->height();
+    const int hw = haystack->width();
+    const int hh = haystack->height();
     if (nw > hw) {
         usage(stderr);
         fprintf(stderr, "Bad rects\n");
@@ -359,16 +376,14 @@ int main(int argc, char **argv)
             bool ok = true;
             for (int xx=0; xx<nw && ok; ++xx) {
                 for (int yy=0; yy<nh; ++yy) {
-                    if (!compare(needle, xx, yy,
-                                 haystack, x + xx, y + yy,
-                                 threshold)) {
+                    if (!compare(needle, xx, yy, haystack, x + xx, y + yy, threshold)) {
                         ok = false;
                         break;
                     }
                 }
             }
             if (ok) {
-                printf("%d,%d+%dx%d\n", x, y, nw, nh);
+                printf("%d,%d+%dx%d\n", x + haystack->subRect().x(), y + haystack->subRect().y(), nw, nh);
                 return 0;
             }
         }
