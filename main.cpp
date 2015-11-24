@@ -53,14 +53,13 @@ struct Image
         ret->mHeight = ret->read<int>(Height);
         ret->mAllTransparent = ret->read<bool>(AllTransparent);
         ret->mSubRect = subRect;
-        if (!subRect.isNull()) {
-            if (!QRect(0, 0, ret->mWidth, ret->mHeight).contains(subRect)) {
-                qDebug() << "Invalid subrect" << QRect(0, 0, ret->mWidth, ret->mHeight) << subRect;
-                return std::shared_ptr<Image>();
-            }
+        ret->mSubRect.intersect(QRect(0, 0, ret->mWidth, ret->mHeight));
+        if (!ret->mSubRect.isNull()) {
+            if (verbose)
+                qDebug() << "Using subrect:" << ret->mSubRect << QRect(0, 0, ret->mWidth, ret->mHeight) << subRect;
             ret->mAllTransparent = true;
-            const int height = subRect.height();
-            const int width = subRect.width();
+            const int height = ret->mSubRect.height();
+            const int width = ret->mSubRect.width();
             for (int y=0; ret->mAllTransparent && y<height; ++y) {
                 for (int x=0; x<width; ++x) {
                     // qDebug() << x << y << ret->color(x, y).toString() << subRect;
