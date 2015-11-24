@@ -214,7 +214,7 @@ int main(int argc, char **argv)
             // }
         } else if (!needle.colors.size()) {
             needle = loadSubImage(arg);
-            if (needle.colors.size()) {
+            if (!needle.colors.size()) {
                 fprintf(stderr, "Failed to decode needle\n");
                 return 1;
             }
