@@ -87,16 +87,20 @@ static inline bool compare(const Image &needleData, int needleX, int needleY,
     const float green = powf(haystack.green - needle.green, 2);
     const float blue = powf(haystack.blue - needle.blue, 2);
 
-    const float distance = sqrtf(red + green + blue);
+    float distance = sqrtf(red + green + blue);
+    const float alphaDistance = std::abs(needle.alpha - haystack.alpha);
     if (verbose >= 2) {
-        fprintf(stderr, "%s to %s => %f (%f) at %d,%d (%d,%d)\n",
+        fprintf(stderr, "%s to %s => %f/%f (%f) at %d,%d (%d,%d)\n",
                 qPrintable(needle.toString()),
                 qPrintable(haystack.toString()),
                 distance,
+                alphaDistance,
                 threshold,
                 needleX, needleY,
                 haystackX, haystackY);
     }
+    if (alphaDistance > distance)
+        distance = alphaDistance;
 
     static float highest = 0;
     const bool ret = distance <= threshold;
@@ -197,22 +201,20 @@ int main(int argc, char **argv)
         // qDebug() << "shit" << x;
         for (int y=0; y<hh - nh; ++y) {
             // qDebug() << "balls" << y;
-            if (compare(needleData, 0, 0, haystackData, x, y, threshold)) {
-                bool ok = true;
-                for (int xx=0; xx<nw && ok; ++xx) {
-                    for (int yy=0; yy<nh; ++yy) {
-                        if (!compare(needleData, xx, yy,
-                                     haystackData, x + xx, y + yy,
-                                     threshold)) {
-                            ok = false;
-                            break;
-                        }
+            bool ok = true;
+            for (int xx=0; xx<nw && ok; ++xx) {
+                for (int yy=0; yy<nh; ++yy) {
+                    if (!compare(needleData, xx, yy,
+                                 haystackData, x + xx, y + yy,
+                                 threshold)) {
+                        ok = false;
+                        break;
                     }
                 }
-                if (ok) {
-                    printf("%d,%d+%dx%d\n", x, y, nw, nh);
-                    return 0;
-                }
+            }
+            if (ok) {
+                printf("%d,%d+%dx%d\n", x, y, nw, nh);
+                return 0;
             }
         }
     }
