@@ -22,22 +22,36 @@ static QImage loadSubImage(const QString &file, const QRect &subRect)
         qDebug() << "Couldn't decode" << file;
         return image;
     }
-    if (image.format() != QImage::Format_ARGB32) {
-        QImage result(image.size(), QImage::Format_ARGB32);
-        {
-            QPainter p(&result);
-            p.fillRect(result.rect(), QColor(Qt::transparent));
-            p.setCompositionMode(QPainter::CompositionMode_Source);
-            p.drawImage(0, 0, image);
-        }
-        // image.save("/tmp/balls1.png", "PNG");
-        image = result;
-        // result.save("/tmp/balls.png", "PNG");
-        // image = image.convertToFormat(QImage::Format_ARGB32);
-    }
+    // QSet<int> seen;
+    // for (int x=0; x<image.width(); ++x) {
+    //     for (int y=0; y<image.height(); ++y) {
+    //         int idx = image.pixelIndex(x, y);
+    //         if (!seen.contains(idx)) {
+    //             seen.insert(idx);
+    //             qDebug() << x << y << idx << image.pixel(x, y) << image.colorTable().at(idx)
+    //                      << QColor::fromRgba(image.colorTable().at(idx));
+    //         }
+    //     }
+    // }
 
+    // qDebug() << image.pixel(1, 1) << image.pixelIndex(1, 1) << image.colorTable();
+
+    // if (image.format() != QImage::Format_ARGB32) {
+    //     QImage result(image.size(), QImage::Format_ARGB32);
+    //     {
+    //         QPainter p(&result);
+    //         p.fillRect(result.rect(), QColor(Qt::transparent));
+    //         p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    //         p.drawImage(0, 0, image);
+    //     }
+    //     // image.save("/tmp/balls1.png", "PNG");
+    //     image = result;
+    //     // result.save("/tmp/balls.png", "PNG");
+    //     // image = image.convertToFormat(QImage::Format_ARGB32);
+    // }
+
+    // qDebug() << image.pixel(1, 1) << QColor(image.pixel(1, 1));
     // qDebug() << image.pixel(0, 0);
-    // qDebug() << QColor(image.pixel(0, 0));
 
     if (!image.isNull() && !subRect.isNull())
         return image.copy(subRect);
@@ -93,7 +107,7 @@ static void decodeImage(const QImage &image, QVector<Color> &cols, bool &allAlph
     for (int y=0; y<h; ++y) {
         for (int x=0; x<w; ++x) {
             Color &c = cols[x + (y * w)];
-            c = QColor(image.pixel(x, y));
+            c = QColor::fromRgba(image.pixel(x, y));
             if (allAlpha)
                 allAlpha = c.alpha == 0;
         }
