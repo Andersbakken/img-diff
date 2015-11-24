@@ -7,7 +7,6 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/mman.h>
-#include <assert.h>
 
 QString cache = "/tmp/img-sub-cache/";
 int verbose = 0;
@@ -76,7 +75,7 @@ struct Image
 
     ~Image()
     {
-        assert(mData);
+        Q_ASSERT(mData);
         munmap(mData, mMappedLength);
     }
 
@@ -86,15 +85,15 @@ struct Image
             x += mSubRect.x();
             y += mSubRect.y();
         }
-// #ifdef NDEBUG
+#ifndef QT_NO_DEBUG
         if (x < 0 || x >= mWidth || y < 0 || y >= mHeight) {
             qDebug() << "bad coords" << x << y << mWidth << mHeight << mSubRect;
         }
-// #endif
-        assert(x < mWidth);
-        assert(y < mHeight);
-        assert(x >= 0);
-        assert(y >= 0);
+#endif
+        Q_ASSERT(x < mWidth);
+        Q_ASSERT(y < mHeight);
+        Q_ASSERT(x >= 0);
+        Q_ASSERT(y >= 0);
         return read<Color>(Colors + ((x + (y * mWidth)) * sizeof(Color)));
     }
 
@@ -114,7 +113,7 @@ private:
     };
     template <typename T> T read(int offset) const
     {
-        assert(offset < mMappedLength);
+        Q_ASSERT(offset < mMappedLength);
         T ret;
         memcpy(&ret, static_cast<const unsigned char *>(mData) + offset, sizeof(T));
         return ret;
