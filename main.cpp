@@ -50,26 +50,8 @@ struct Image
         ret->mMappedLength = st.st_size;
         ret->mWidth = ret->read<int>(Width);
         ret->mHeight = ret->read<int>(Height);
-        ret->mAllTransparent = ret->read<bool>(AllTransparent);
         if (!subRect.isNull())
             ret->mSubRect = subRect.intersected(QRect(0, 0, ret->mWidth, ret->mHeight));
-        if (!ret->mSubRect.isNull()) {
-            if (verbose)
-                qDebug() << "Using subrect:" << ret->mSubRect << QRect(0, 0, ret->mWidth, ret->mHeight) << subRect;
-            ret->mAllTransparent = true;
-            const int height = ret->mSubRect.height();
-            const int width = ret->mSubRect.width();
-            for (int y=0; ret->mAllTransparent && y<height; ++y) {
-                for (int x=0; x<width; ++x) {
-                    // qDebug() << x << y << ret->color(x, y).toString() << subRect;
-                    // qDebug() << x << y << width << height << subRect << ret->mWidth << ret->mHeight;
-                    if (ret->color(x, y).alpha) {
-                        ret->mAllTransparent = false;
-                        break;
-                    }
-                }
-            }
-        }
         return ret;
     }
 
@@ -99,17 +81,16 @@ struct Image
 
     int width() const { return mSubRect.isNull() ? mWidth : mSubRect.width(); }
     int height() const { return mSubRect.isNull() ? mHeight : mSubRect.height(); }
-    bool allTransparent() const { return mAllTransparent; }
     QRect subRect() const { return mSubRect; }
+    QRect totalRect() const { return QRect(0, 0, mWidth, mHeight); }
 private:
     Image()
-        : mData(0), mMappedLength(0), mFD(-1), mWidth(0), mHeight(0), mAllTransparent(false)
+        : mData(0), mMappedLength(0), mFD(-1), mWidth(0), mHeight(0)
     {}
     enum Offset {
         Width = 0,
         Height = sizeof(int),
-        AllTransparent = Height + sizeof(int),
-        Colors = AllTransparent + sizeof(bool)
+        Colors = Height + sizeof(bool)
     };
     template <typename T> T read(int offset) const
     {
@@ -123,7 +104,6 @@ private:
     int mMappedLength;
     int mFD;
     int mWidth, mHeight;
-    bool mAllTransparent;
     QRect mSubRect;
 };
 
@@ -172,21 +152,16 @@ static std::shared_ptr<Image> load(const QString &file, const QRect &subRect)
     }
 
     int w = image.width(), h = image.height();
-    bool allTransparent = true;
     QVector<Color> colors(w * h);
     for (int y=0; y<h; ++y) {
         for (int x=0; x<w; ++x) {
             Color &c = colors[x + (y * w)];
             c = QColor::fromRgba(image.pixel(x, y));
-            if (allTransparent) {
-                allTransparent = c.alpha == 0;
-            }
         }
     }
 
     if (!fwrite(&w, sizeof(int), 1, f)
         || !fwrite(&h, sizeof(int), 1, f)
-        || !fwrite(&allTransparent, sizeof(bool), 1, f)
         || !writeColors(colors, f)) {
         fclose(f);
         unlink(qPrintable(cacheFile));
@@ -322,20 +297,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "Failed to decode needle\n");
         return 1;
     }
-    if (needle->allTransparent()) {
-        printf("0,0+0x0\n");
-        return 0;
-    }
-
     haystack = load(haystackString);
     if (!haystack) {
         fprintf(stderr, "Failed to decode haystack\n");
         return 1;
     }
-    if (haystack->allTransparent()) {
-        return 1;
-    }
-
     if (verbose >= 3) {
         fprintf(stderr, "NEEDLE %dx%d", needle->width(), needle->height());
 
@@ -376,21 +342,28 @@ int main(int argc, char **argv)
     }
 
     // qDebug() << nw << nh << hw << hh;
+    auto tryArea = [&](int x, int y) {
+        for (int xx=0; xx<nw; ++xx) {
+            for (int yy=0; yy<nh; ++yy) {
+                if (!compare(needle, xx, yy, haystack, x + xx, y + yy, threshold)) {
+                    return false;
+                }
+            }
+        }
+        printf("%d,%d+%dx%d\n", x + haystack->subRect().x(), y + haystack->subRect().y(), nw, nh);
+        return true;
+    };
+
+
+    if ((needle->subRect().x() || needle->subRect().y()) && tryArea(needle->subRect().x(), needle->subRect().y())) {
+        return 0;
+    }
+
     for (int x=0; x<=hw - nw; ++x) {
         // qDebug() << "shit" << x;
         for (int y=0; y<=hh - nh; ++y) {
             // qDebug() << "balls" << y;
-            bool ok = true;
-            for (int xx=0; xx<nw && ok; ++xx) {
-                for (int yy=0; yy<nh; ++yy) {
-                    if (!compare(needle, xx, yy, haystack, x + xx, y + yy, threshold)) {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if (ok) {
-                printf("%d,%d+%dx%d\n", x + haystack->subRect().x(), y + haystack->subRect().y(), nw, nh);
+            if (tryArea(x, y)) {
                 return 0;
             }
         }
