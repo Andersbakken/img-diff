@@ -350,12 +350,16 @@ int main(int argc, char **argv)
                 }
             }
         }
+        printf("%d,%d+%dx%d\n", x, y, nw, nh);
         return true;
     };
 
 
     if ((needle->subRect().x() || needle->subRect().y()) && tryArea(needle->subRect().x(), needle->subRect().y())) {
-        printf("0,0+0x0\n");
+        if (verbose) {
+            qDebug() << "FOUND IN SAME SPOT";
+        }
+        // printf("0,0+0x0\n");
         return 0;
     }
 
@@ -364,7 +368,6 @@ int main(int argc, char **argv)
         for (int y=0; y<=hh - nh; ++y) {
             // qDebug() << "balls" << y;
             if (tryArea(x, y)) {
-                printf("%d,%d+%dx%d\n", x + haystack->subRect().x(), y + haystack->subRect().y(), nw, nh);
                 return 0;
             }
         }
