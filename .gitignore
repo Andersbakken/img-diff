@@ -1,3 +1,5 @@
 /Makefile
 /main.o
 /img-sub
+/.gdb_brestore.txt
+/.gdb_history
