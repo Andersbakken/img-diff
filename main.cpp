@@ -93,6 +93,10 @@ public:
     bool operator==(const Chunk &other) const { return compare(other); }
     bool operator!=(const Chunk &other) const { return !compare(other); }
     std::shared_ptr<const Image> image() const { return mImage; }
+    bool isNull() const { return !mImage; }
+    bool isValid() const { return mImage.get(); }
+    void adopt(const Chunk &other, Qt::Alignment alignment);
+    Qt::Alignment isAligned(const Chunk &other) const;
 private:
     std::shared_ptr<const Image> mImage;
     QRect mRect;
@@ -124,9 +128,10 @@ public:
 
     Chunk chunk(const QRect &rect) const { return Chunk(shared_from_this(), rect); }
 
-    QVector<Chunk> chunks(int count) const
+    QVector<Chunk> chunks(int count, const QRegion &filter = QRegion()) const
     {
         if (count == 1) {
+            Q_ASSERT(filter.isEmpty());
             QVector<Chunk> ret;
             ret.push_back(chunk(rect()));
             return ret;
@@ -140,11 +145,13 @@ public:
         for (int y=0; y<count; ++y) {
             for (int x=0; x<count; ++x) {
                 const QRect r(x * w, y * h, w, h);
-                // const QRect r(x * w,
-                //               y * h,
-                //               w + (x + 1 == count ? wextra : 0),
-                //               h + (y + 1 == count ? hextra : 0));
-                ret[(y * count) + x] = chunk(r);
+                if (!filter.intersects(r)) {
+                    // const QRect r(x * w,
+                    //               y * h,
+                    //               w + (x + 1 == count ? wextra : 0),
+                    //               h + (y + 1 == count ? hextra : 0));
+                    ret[(y * count) + x] = chunk(r);
+                }
             }
         }
         return ret;
@@ -213,6 +220,37 @@ bool Chunk::compare(const Chunk &other) const
     return true;
 }
 
+Qt::Alignment Chunk::isAligned(const Chunk &other) const
+{
+    Qt::Alignment ret;
+    if (height() == other.height()) {
+        if (x() + width() == other.x()) {
+            ret |= Qt::AlignRight;
+        } else if (other.x() + other.width() == x()) {
+            ret |= Qt::AlignLeft;
+        }
+    } else if (width() == other.width()) {
+        if (y() + height() == other.y()) {
+            ret |= Qt::AlignBottom;
+        } else if (other.y() + other.height() == y()) {
+            ret |= Qt::AlignTop;
+        }
+    }
+    return ret;
+}
+
+void Chunk::adopt(const Chunk &other, Qt::Alignment alignment)
+{
+    Q_ASSERT(alignment);
+    Q_ASSERT(isAligned(other) == alignment);
+    QRegion region;
+    region |= rect();
+    region |= other.rect();
+    mRect = region.boundingRect();
+    Q_ASSERT(mRect.bottom() < mImage->height());
+    Q_ASSERT(mRect.right() < mImage->width()); // bottom/right are off-by-one
+}
+
 void usage(FILE *f)
 {
     fprintf(f,
@@ -223,10 +261,33 @@ void usage(FILE *f)
             "  --threshold=[threshold]            Set threshold value\n");
 }
 
-static void joinRect(QVector<QRect> &rects)
+static void joinChunks(QVector<std::pair<Chunk, Chunk> > &chunks)
 {
-
-
+    bool modified;
+    do {
+        modified = false;
+        for (int i=0; !modified && i<chunks.size(); ++i) {
+            Chunk &chunk = chunks[i].first;
+            Chunk &otherChunk = chunks[i].second;
+            for (int j=i + 1; j<chunks.size(); ++j) {
+                const Qt::Alignment aligned = chunk.isAligned(chunks.at(j).first);
+                if (verbose >= 2) {
+                    qDebug() << "comparing" << chunk.rect() << chunks.at(j).first.rect() << aligned
+                             << otherChunk.rect() << chunks.at(j).second.rect()
+                             << otherChunk.isAligned(chunks.at(j).second);
+                }
+                if (aligned && otherChunk.isAligned(chunks.at(j).second) == aligned) {
+                    modified = true;
+                    chunk.adopt(chunks.at(j).first, aligned);
+                    otherChunk.adopt(chunks.at(j).second, aligned);
+                    chunks.remove(j, 1);
+                    if (verbose)
+                        qDebug() << "chunk" << i << chunk.rect() << "is aligned with chunk" << j << chunks.at(j).first.rect();
+                    break;
+                }
+            }
+        }
+    } while (modified);
 }
 
 int main(int argc, char **argv)
@@ -341,15 +402,21 @@ int main(int argc, char **argv)
     // qDebug() << chunkIndexes(10, 0);
     // return 0;
     QVector<std::pair<Chunk, Chunk> > matches;
+    QRegion used;
     int count = 1;
     while (true) {
-        const QVector<Chunk> chunks1 = image1->chunks(count);
-        Q_ASSERT(!chunks1.empty());
-        if (chunks1[0].width() < minSize || chunks1[0].height() < minSize)
-            break;
+        const QVector<Chunk> chunks1 = image1->chunks(count, used);
         const QVector<Chunk> chunks2 = image2->chunks(count);
+        bool done = false;
         for (int i=0; i<chunks1.size(); ++i) {
             const Chunk &chunk = chunks1.at(i);
+            if (chunk.isNull())
+                continue;
+            if (chunk.width() < minSize || chunk.height() < minSize) {
+                done = true;
+                break;
+            }
+
             for (int idx : chunkIndexes(count, i)) {
                 const Chunk &otherChunk = chunks2.at(idx);
                 if (verbose >= 2) {
@@ -357,18 +424,24 @@ int main(int argc, char **argv)
                 }
 
                 if (chunk == otherChunk) {
+                    used |= chunk.rect();
                     matches.push_back(std::make_pair(chunk, otherChunk));
                     break;
                 }
             }
         }
+        if (done)
+            break;
 
         ++count;
     }
-    for (const auto &match : matches) {
-        printf("%d,%d+%dx%d %d,%d+%dx%d\n",
-               match.first.x(), match.first.y(), match.first.width(), match.first.height(),
-               match.second.x(), match.second.y(), match.second.width(), match.second.height());
+    if (!matches.isEmpty()) {
+        joinChunks(matches);
+        for (const auto &match : matches) {
+            printf("%d,%d+%dx%d %d,%d+%dx%d\n",
+                   match.first.x(), match.first.y(), match.first.width(), match.first.height(),
+                   match.second.x(), match.second.y(), match.second.width(), match.second.height());
+        }
     }
 
     return 0;

@@ -1,5 +1,6 @@
 /Makefile
-/main.o
 /img-sub
 /.gdb_brestore.txt
 /.gdb_history
+/.gdb_brestore
+/.obj
