@@ -92,6 +92,7 @@ public:
     bool compare(const Chunk &other) const;
     bool operator==(const Chunk &other) const { return compare(other); }
     bool operator!=(const Chunk &other) const { return !compare(other); }
+    std::shared_ptr<const Image> image() const { return mImage; }
 private:
     std::shared_ptr<const Image> mImage;
     QRect mRect;
@@ -111,7 +112,6 @@ public:
         std::shared_ptr<Image> ret(new Image);
         ret->mFileName = fileName;
         ret->mSize = image.size();
-        qDebug() << ret->mSize;
         ret->mColors.resize(w * h);
         for (int y=0; y<h; ++y) {
             for (int x=0; x<w; ++x) {
@@ -124,25 +124,26 @@ public:
 
     Chunk chunk(const QRect &rect) const { return Chunk(shared_from_this(), rect); }
 
-    std::vector<Chunk> chunks(int count) const
+    QVector<Chunk> chunks(int count) const
     {
         if (count == 1) {
-            std::vector<Chunk> ret;
+            QVector<Chunk> ret;
             ret.push_back(chunk(rect()));
             return ret;
         }
         Q_ASSERT(count > 1);
-        std::vector<Chunk> ret(count * 2);
+        QVector<Chunk> ret(count * count);
         const int w = width() / count;
-        const int wextra = width() - (w * count);
+        // const int wextra = width() - (w * count);
         const int h = height() / count;
-        const int hextra = height() - (h * count);
+        // const int hextra = height() - (h * count);
         for (int y=0; y<count; ++y) {
             for (int x=0; x<count; ++x) {
-                const QRect r(x * w,
-                              y * h,
-                              w + (x + 1 == count ? wextra : 0),
-                              h + (y + 1 == count ? hextra : 0));
+                const QRect r(x * w, y * h, w, h);
+                // const QRect r(x * w,
+                //               y * h,
+                //               w + (x + 1 == count ? wextra : 0),
+                //               h + (y + 1 == count ? hextra : 0));
                 ret[(y * count) + x] = chunk(r);
             }
         }
@@ -172,6 +173,12 @@ private:
     QVector<Color> mColors;
 
 };
+
+QDebug &operator<<(QDebug &debug, const Chunk &chunk)
+{
+    debug << "Chunk(" << chunk.image()->fileName() << chunk.rect() << ")";
+    return debug;
+}
 
 Chunk::Chunk(const std::shared_ptr<const Image> &i, const QRect &r)
     : mImage(i), mRect(r)
@@ -211,8 +218,15 @@ void usage(FILE *f)
     fprintf(f,
             "img-diff [options...] imga imgb\n"
             "  --verbose|-v                       Be verbose\n"
-            "  --cache=[directory]                Use this directory for caches (default \"/tmp/img-sub-cache/\") \n"
+            "  --range=[range]                    The range?\n"
+            "  --min-size=[min-size]              The min-size?\n"
             "  --threshold=[threshold]            Set threshold value\n");
+}
+
+static void joinRect(QVector<QRect> &rects)
+{
+
+
 }
 
 int main(int argc, char **argv)
@@ -221,6 +235,7 @@ int main(int argc, char **argv)
     std::shared_ptr<Image> image1, image2;
     float threshold = 0;
     int minSize = 10;
+    int range = 2;
     for (int i=1; i<argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
         if (arg == "--help" || arg == "-h") {
@@ -259,6 +274,17 @@ int main(int argc, char **argv)
             }
             if (verbose)
                 qDebug() << "min-size:" << minSize;
+        } else if (arg.startsWith("--range=")) {
+            bool ok;
+            QString t = arg.mid(11);
+            range = t.toInt(&ok);
+            if (!ok || range <= 0) {
+                fprintf(stderr, "Invalid --range (%s), must be positive integer value\n",
+                        qPrintable(arg.mid(12)));
+                return 1;
+            }
+            if (verbose)
+                qDebug() << "range:" << range;
         } else if (!image1) {
             image1 = Image::load(arg);
             if (!image1) {
@@ -290,130 +316,60 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // if (verbose >= 3) {
-    //     fprintf(stderr, "NEEDLE %dx%d", needle->width(), needle->height());
+    auto chunkIndexes = [range](int count, int idx) {
+        QVector<int> indexes;
+        const int y = (idx / count);
+        const int x = idx % count;
+        auto add = [&](int xadd, int yadd) {
+            const int xx = x + xadd;
+            if (xx < 0 || xx >= count)
+                return;
+            const int yy = y + yadd;
+            if (yy < 0 || yy >= count)
+                return;
+            indexes.push_back((yy * count) + xx);
+        };
+        for (int y=-range; y<=range; ++y) {
+            for (int x=-range; x<=range; ++x) {
+                add(x, y);
+            }
+        }
 
-    //     int height = needle->height();
-    //     int width = needle->width();
-    //     for (int y=0; y<height; ++y) {
-    //         for (int x=0; x<width; ++x) {
-    //             printf("%s ", qPrintable(needle->color(x, y).toString()));
-    //         }
-    //         printf("\n");
-    //     }
+        return indexes;
+    };
 
-    //     fprintf(stderr, "HAYSTACK %dx%d", haystack->width(), haystack->height());
-
-    //     height = haystack->height();
-    //     width = haystack->width();
-    //     for (int y=0; y<height; ++y) {
-    //         for (int x=0; x<width; ++x) {
-    //             printf("%s ", qPrintable(haystack->color(x, y).toString()));
-    //         }
-    //         printf("\n");
-    //     }
-    // }
-
-    // const int nw = needle->width();
-    // const int nh = needle->height();
-    // const int hw = haystack->width();
-    // const int hh = haystack->height();
-    // if (nw > hw) {
-    //     usage(stderr);
-    //     fprintf(stderr, "Bad rects\n");
-    //     return 1;
-    // }
-    // if (nh > hh) {
-    //     usage(stderr);
-    //     fprintf(stderr, "Bad rects\n");
-    //     return 1;
-    // }
-
-    // // qDebug() << nw << nh << hw << hh;
-    // auto tryArea = [&](int x, int y) {
-    //     for (int xx=0; xx<nw; ++xx) {
-    //         for (int yy=0; yy<nh; ++yy) {
-    //             if (!compare(needle, xx, yy, haystack, x + xx, y + yy, threshold)) {
-    //                 return false;
-    //             }
-    //         }
-    //     }
-    //     printf("%d,%d+%dx%d\n", x, y, nw, nh);
-    //     return true;
-    // };
-
-
-    // if ((needle->subRect().x() || needle->subRect().y()) && tryArea(needle->subRect().x(), needle->subRect().y())) {
-    //     if (verbose) {
-    //         qDebug() << "FOUND IN SAME SPOT";
-    //     }
-    //     // printf("0,0+0x0\n");
-    //     return 0;
-    // }
-
-    // for (int x=0; x<=hw - nw; ++x) {
-    //     // qDebug() << "shit" << x;
-    //     for (int y=0; y<=hh - nh; ++y) {
-    //         // qDebug() << "balls" << y;
-    //         if (tryArea(x, y)) {
-    //             return 0;
-    //         }
-    //     }
-    // }
-
-    std::vector<std::pair<Chunk, Chunk> > matches;
+    // qDebug() << chunkIndexes(10, 0);
+    // return 0;
+    QVector<std::pair<Chunk, Chunk> > matches;
     int count = 1;
     while (true) {
-        const std::vector<Chunk> chunks1 = image1->chunks(count);
+        const QVector<Chunk> chunks1 = image1->chunks(count);
         Q_ASSERT(!chunks1.empty());
         if (chunks1[0].width() < minSize || chunks1[0].height() < minSize)
             break;
-        const std::vector<Chunk> chunks2 = image2->chunks(count);
+        const QVector<Chunk> chunks2 = image2->chunks(count);
+        for (int i=0; i<chunks1.size(); ++i) {
+            const Chunk &chunk = chunks1.at(i);
+            for (int idx : chunkIndexes(count, i)) {
+                const Chunk &otherChunk = chunks2.at(idx);
+                if (verbose >= 2) {
+                    qDebug() << "comparing chunks" << chunk << otherChunk;
+                }
+
+                if (chunk == otherChunk) {
+                    matches.push_back(std::make_pair(chunk, otherChunk));
+                    break;
+                }
+            }
+        }
+
         ++count;
     }
-
-#if 0
-    std::function<QRect(const QRect &)> check = [&](const QRect &rect) {
-        if (image1->chunk(rect) == image2->chunk(rect)) {
-            // need to return info about rect
-            return rect;
-        }
-        qDebug() << "COMPARING" << rect << minSize;
-        const int w = rect.width() / 2;
-        if (w < minSize)
-            return QRect();
-        const int wextra = rect.width() - (w * 2);
-        const int h = rect.height() / 2;
-        if (h < minSize)
-            return QRect();
-        const int hextra = rect.height() - (h * 2);
-
-        {
-            const QRect r = check(QRect(rect.x(), rect.y(), w + wextra, h + hextra));
-            if (!r.isNull())
-                return r;
-        }
-        {
-            const QRect r = check(QRect(rect.x() + w + wextra, rect.y(), w, h + hextra));
-            if (!r.isNull())
-                return r;
-        }
-        {
-            const QRect r = check(QRect(rect.x(), rect.y() + h + hextra, w + wextra, h));
-            if (!r.isNull())
-                return r;
-        }
-        return check(QRect(rect.x() + w + wextra, rect.y() + h + hextra, w, h));
-    };
-
-    QRect rect = check(image1->rect());
-    if (rect.isNull()) {
-        if (verbose)
-            fprintf(stderr, "Couldn't find area\n");
-        return 1;
-    } else {
-        qDebug() << rect;
+    for (const auto &match : matches) {
+        printf("%d,%d+%dx%d %d,%d+%dx%d\n",
+               match.first.x(), match.first.y(), match.first.width(), match.first.height(),
+               match.second.x(), match.second.y(), match.second.width(), match.second.height());
     }
-#endif
+
     return 0;
 }
