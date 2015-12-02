@@ -10,3 +10,4 @@ INCLUDEPATH += .
 # Input
 SOURCES += main.cpp
 QMAKE_CXXFLAGS = -std=c++11
+OBJECTS_DIR = .obj
