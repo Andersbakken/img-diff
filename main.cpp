@@ -95,7 +95,7 @@ public:
     std::shared_ptr<const Image> image() const { return mImage; }
     bool isNull() const { return !mImage; }
     bool isValid() const { return mImage.get(); }
-    void adopt(const Chunk &other, Qt::Alignment alignment);
+    void adopt(const Chunk &other);
     Qt::Alignment isAligned(const Chunk &other) const;
 private:
     std::shared_ptr<const Image> mImage;
@@ -239,10 +239,9 @@ Qt::Alignment Chunk::isAligned(const Chunk &other) const
     return ret;
 }
 
-void Chunk::adopt(const Chunk &other, Qt::Alignment alignment)
+void Chunk::adopt(const Chunk &other)
 {
-    Q_ASSERT(alignment);
-    Q_ASSERT(isAligned(other) == alignment);
+    Q_ASSERT(isAligned(other));
     QRegion region;
     region |= rect();
     region |= other.rect();
@@ -278,8 +277,8 @@ static void joinChunks(QVector<std::pair<Chunk, Chunk> > &chunks)
                 }
                 if (aligned && otherChunk.isAligned(chunks.at(j).second) == aligned) {
                     modified = true;
-                    chunk.adopt(chunks.at(j).first, aligned);
-                    otherChunk.adopt(chunks.at(j).second, aligned);
+                    chunk.adopt(chunks.at(j).first);
+                    otherChunk.adopt(chunks.at(j).second);
                     chunks.remove(j, 1);
                     if (verbose)
                         qDebug() << "chunk" << i << chunk.rect() << "is aligned with chunk" << j << chunks.at(j).first.rect();
