@@ -117,6 +117,7 @@ public:
     };
 
     quint32 flags() const { return mFlags; }
+    void save(const QString &fileName) const;
 private:
     std::shared_ptr<const Image> mImage;
     QRect mRect;
@@ -137,6 +138,7 @@ public:
         std::shared_ptr<Image> ret(new Image);
         ret->mFileName = fileName;
         ret->mSize = image.size();
+        ret->mImage = image;
         ret->mColors.resize(w * h);
         for (int y=0; y<h; ++y) {
             for (int x=0; x<w; ++x) {
@@ -193,11 +195,13 @@ public:
     int height() const { return mSize.height(); }
     QString fileName() const { return mFileName; }
     QRect rect() const { return QRect(0, 0, width(), height()); }
+    QImage image() const { return mImage; }
 private:
     Image()
     {}
 
     QString mFileName;
+    QImage mImage;
     QSize mSize;
     QVector<Color> mColors;
 
@@ -277,6 +281,13 @@ Qt::Alignment Chunk::isAligned(const Chunk &other) const
     return ret;
 }
 
+void Chunk::save(const QString &fileName) const
+{
+    Q_ASSERT(mImage);
+    const QImage image = mImage->image().copy(mRect);
+    image.save(fileName);
+}
+
 void Chunk::adopt(const Chunk &other)
 {
     Q_ASSERT(isAligned(other));
@@ -297,6 +308,7 @@ void usage(FILE *f)
             "  --min-size=[min-size]              The min-size?\n"
             "  --same                             Only display the areas that are identical\n"
             "  --no-join                          Don't join chunks\n"
+            "  --dump-images                      Dump images to /tmp/img-sub_%%d[a|b].png\n"
             "  --imagemagick                      Douchy rects\n"
             "  --threshold=[threshold]            Set threshold value\n");
 }
@@ -309,6 +321,8 @@ static void joinChunks(QVector<std::pair<Chunk, Chunk> > &chunks)
         for (int i=0; !modified && i<chunks.size(); ++i) {
             Chunk &chunk = chunks[i].first;
             Chunk &otherChunk = chunks[i].second;
+            if (chunk.rect() == otherChunk.rect())
+                continue;
             for (int j=i + 1; j<chunks.size(); ++j) {
                 const Chunk &maybeChunk = chunks.at(j).first;
                 if (maybeChunk.isNull())
@@ -342,6 +356,7 @@ int main(int argc, char **argv)
     float threshold = 0;
     bool same = false;
     bool nojoin = false;
+    bool dumpImages = false;
     int range = 2;
     for (int i=1; i<argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -352,6 +367,8 @@ int main(int argc, char **argv)
             ++verbose;
         } else if (arg == "--imagemagick") {
             imageMagickFormat = true;
+        } else if (arg == "--dump-images") {
+            dumpImages = true;
         } else if (arg == "--no-join") {
             nojoin = true;
         } else if (arg.startsWith("--threshold=")) {
@@ -486,7 +503,21 @@ int main(int argc, char **argv)
     if (!matches.isEmpty()) {
         if (!nojoin)
             joinChunks(matches);
+        int i = 0;
         for (const auto &match : matches) {
+            if (dumpImages) {
+                char buf[1024];
+                snprintf(buf, sizeof(buf), "/tmp/img-sub_%04d_%s_a%s.png", i, toString(match.first.rect()).constData(),
+                         match.first.flags() & Chunk::AllTransparent ? "_alpha" : "");
+                match.first.save(buf);
+                if (verbose)
+                    fprintf(stderr, "Dumped %s\n", buf);
+                snprintf(buf, sizeof(buf), "/tmp/img-sub_%04d_%s_b%s.png", i, toString(match.second.rect()).constData(),
+                         match.second.flags() & Chunk::AllTransparent ? "_alpha" : "");
+                match.second.save(buf);
+                if (verbose)
+                    fprintf(stderr, "Dumped %s\n", buf);
+            }
             if (match.first.rect() != match.second.rect()) {
                 if (!same) {
                     printf("%s %s\n", toString(match.first.rect()).constData(), toString(match.second.rect()).constData());
@@ -494,6 +525,7 @@ int main(int argc, char **argv)
             } else if (same) {
                 printf("%s\n", toString(match.first.rect()).constData());
             }
+            ++i;
         }
         if (!same) {
             QRegion all;
