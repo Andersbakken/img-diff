@@ -296,6 +296,7 @@ void usage(FILE *f)
             "  --range=[range]                    The range?\n"
             "  --min-size=[min-size]              The min-size?\n"
             "  --same                             Only display the areas that are identical\n"
+            "  --no-join                          Don't join chunks\n"
             "  --imagemagick                      Douchy rects\n"
             "  --threshold=[threshold]            Set threshold value\n");
 }
@@ -340,6 +341,7 @@ int main(int argc, char **argv)
     std::shared_ptr<Image> image1, image2;
     float threshold = 0;
     bool same = false;
+    bool nojoin = false;
     int range = 2;
     for (int i=1; i<argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -350,6 +352,8 @@ int main(int argc, char **argv)
             ++verbose;
         } else if (arg == "--imagemagick") {
             imageMagickFormat = true;
+        } else if (arg == "--no-join") {
+            nojoin = true;
         } else if (arg.startsWith("--threshold=")) {
             bool ok;
             QString t = arg.mid(12);
@@ -480,7 +484,8 @@ int main(int argc, char **argv)
         ++count;
     }
     if (!matches.isEmpty()) {
-        joinChunks(matches);
+        if (!nojoin)
+            joinChunks(matches);
         for (const auto &match : matches) {
             if (match.first.rect() != match.second.rect()) {
                 if (!same) {
