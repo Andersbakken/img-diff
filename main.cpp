@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 
+int minSize = 10;
 int verbose = 0;
 float threshold = 0;
 bool imageMagickFormat = false;
@@ -92,7 +93,7 @@ class Chunk
 public:
     Chunk(const std::shared_ptr<const Image> &i = std::shared_ptr<const Image>(), const QRect &r = QRect());
     Chunk(const Chunk &other)
-        : mImage(other.mImage), mRect(other.mRect)
+        : mImage(other.mImage), mRect(other.mRect), mFlags(other.mFlags)
     {}
     int x() const { return mRect.x(); }
     int y() const { return mRect.y(); }
@@ -110,9 +111,16 @@ public:
     bool isValid() const { return mImage.get(); }
     void adopt(const Chunk &other);
     Qt::Alignment isAligned(const Chunk &other) const;
+    enum Flag {
+        None = 0x0,
+        AllTransparent = 0x1
+    };
+
+    quint32 flags() const { return mFlags; }
 private:
     std::shared_ptr<const Image> mImage;
     QRect mRect;
+    quint32 mFlags;
 };
 
 class Image : public std::enable_shared_from_this<Image>
@@ -132,8 +140,7 @@ public:
         ret->mColors.resize(w * h);
         for (int y=0; y<h; ++y) {
             for (int x=0; x<w; ++x) {
-                Color &c = ret->mColors[x + (y * w)];
-                c = QColor(image.pixel(x, y));
+                ret->mColors[x + (y * w)] = QColor::fromRgba(image.pixel(x, y));
             }
         }
         return ret;
@@ -150,11 +157,13 @@ public:
             return ret;
         }
         Q_ASSERT(count > 1);
-        QVector<Chunk> ret(count * count);
         const int w = width() / count;
         // const int wextra = width() - (w * count);
         const int h = height() / count;
+        if (w < minSize || h < minSize)
+            return QVector<Chunk>();
         // const int hextra = height() - (h * count);
+        QVector<Chunk> ret(count * count);
         for (int y=0; y<count; ++y) {
             for (int x=0; x<count; ++x) {
                 const QRect r(x * w, y * h, w, h);
@@ -201,11 +210,25 @@ QDebug &operator<<(QDebug &debug, const Chunk &chunk)
 }
 
 Chunk::Chunk(const std::shared_ptr<const Image> &i, const QRect &r)
-    : mImage(i), mRect(r)
+    : mImage(i), mRect(r), mFlags(0)
 {
     if (mImage) {
+        Q_ASSERT(!r.isNull());
         Q_ASSERT(r.bottom() < i->height());
         Q_ASSERT(r.right() < i->width()); // bottom/right are off-by-one
+        mFlags |= AllTransparent;
+        ([this]() {
+            const int h = height();
+            const int w = width();
+            for (int y = 0; y<h; ++y) {
+                for (int x = 0; x<w; ++x) {
+                    if (color(x, y).alpha) {
+                        mFlags &= ~AllTransparent;
+                        return;
+                    }
+                }
+            }
+        })();
     }
     Q_ASSERT(!mImage.get() == r.isNull());
 }
@@ -220,6 +243,8 @@ inline Color Chunk::color(int x, int y) const // x and y is in Chunk coordinates
 
 bool Chunk::compare(const Chunk &other) const
 {
+    if ((mFlags & AllTransparent) && (other.mFlags & AllTransparent))
+        return true;
     Q_ASSERT(other.mRect.size() == mRect.size());
     const int h = height();
     const int w = width();
@@ -284,19 +309,24 @@ static void joinChunks(QVector<std::pair<Chunk, Chunk> > &chunks)
             Chunk &chunk = chunks[i].first;
             Chunk &otherChunk = chunks[i].second;
             for (int j=i + 1; j<chunks.size(); ++j) {
-                const Qt::Alignment aligned = chunk.isAligned(chunks.at(j).first);
+                const Chunk &maybeChunk = chunks.at(j).first;
+                if (maybeChunk.isNull())
+                    continue;
+                if ((chunk.flags() & Chunk::AllTransparent) != (maybeChunk.flags() & Chunk::AllTransparent))
+                    continue;
+                const Qt::Alignment aligned = chunk.isAligned(maybeChunk);
                 if (verbose >= 2) {
-                    qDebug() << "comparing" << chunk.rect() << chunks.at(j).first.rect() << aligned
+                    qDebug() << "comparing" << chunk.rect() << maybeChunk.rect() << aligned
                              << otherChunk.rect() << chunks.at(j).second.rect()
                              << otherChunk.isAligned(chunks.at(j).second);
                 }
                 if (aligned && otherChunk.isAligned(chunks.at(j).second) == aligned) {
                     modified = true;
-                    chunk.adopt(chunks.at(j).first);
+                    chunk.adopt(maybeChunk);
                     otherChunk.adopt(chunks.at(j).second);
                     chunks.remove(j, 1);
                     if (verbose)
-                        qDebug() << "chunk" << i << chunk.rect() << "is aligned with chunk" << j << chunks.at(j).first.rect();
+                        qDebug() << "chunk" << i << chunk.rect() << "is aligned with chunk" << j << maybeChunk.rect();
                     break;
                 }
             }
@@ -310,7 +340,6 @@ int main(int argc, char **argv)
     std::shared_ptr<Image> image1, image2;
     float threshold = 0;
     bool same = false;
-    int minSize = 10;
     int range = 2;
     for (int i=1; i<argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -425,16 +454,14 @@ int main(int argc, char **argv)
     int count = 1;
     while (true) {
         const QVector<Chunk> chunks1 = image1->chunks(count, used);
+        if (chunks1.isEmpty())
+            break;
         const QVector<Chunk> chunks2 = image2->chunks(count);
-        bool done = false;
         for (int i=0; i<chunks1.size(); ++i) {
             const Chunk &chunk = chunks1.at(i);
             if (chunk.isNull())
                 continue;
-            if (chunk.width() < minSize || chunk.height() < minSize) {
-                done = true;
-                break;
-            }
+            Q_ASSERT(chunk.width() >= minSize && chunk.height() >= minSize);
 
             for (int idx : chunkIndexes(count, i)) {
                 const Chunk &otherChunk = chunks2.at(idx);
@@ -449,8 +476,6 @@ int main(int argc, char **argv)
                 }
             }
         }
-        if (done)
-            break;
 
         ++count;
     }
