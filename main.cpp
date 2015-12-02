@@ -10,6 +10,19 @@
 
 int verbose = 0;
 float threshold = 0;
+bool imageMagickFormat = false;
+
+static inline QByteArray toString(const QRect &rect)
+{
+    char buf[1024];
+    if (imageMagickFormat) {
+        snprintf(buf, sizeof(buf), "%dx%d+%d+%d", rect.width(), rect.height(), rect.x(), rect.y());
+    } else {
+        snprintf(buf, sizeof(buf), "%d,%d+%dx%d", rect.x(), rect.y(), rect.width(), rect.height());
+    }
+    return buf;
+}
+
 struct Color
 {
     Color(const QColor &col = QColor())
@@ -258,6 +271,7 @@ void usage(FILE *f)
             "  --range=[range]                    The range?\n"
             "  --min-size=[min-size]              The min-size?\n"
             "  --same                             Only display the areas that are identical\n"
+            "  --imagemagick                      Douchy rects\n"
             "  --threshold=[threshold]            Set threshold value\n");
 }
 
@@ -305,6 +319,8 @@ int main(int argc, char **argv)
             return 0;
         } else if (arg == "-v" || arg == "--verbose") {
             ++verbose;
+        } else if (arg == "--imagemagick") {
+            imageMagickFormat = true;
         } else if (arg.startsWith("--threshold=")) {
             bool ok;
             QString t = arg.mid(12);
@@ -443,13 +459,10 @@ int main(int argc, char **argv)
         for (const auto &match : matches) {
             if (match.first.rect() != match.second.rect()) {
                 if (!same) {
-                    printf("%d,%d+%dx%d %d,%d+%dx%d\n",
-                           match.first.x(), match.first.y(), match.first.width(), match.first.height(),
-                           match.second.x(), match.second.y(), match.second.width(), match.second.height());
+                    printf("%s %s\n", toString(match.first.rect()).constData(), toString(match.second.rect()).constData());
                 }
             } else if (same) {
-                printf("%d,%d+%dx%d\n",
-                       match.first.x(), match.first.y(), match.first.width(), match.first.height());
+                printf("%s\n", toString(match.first.rect()).constData());
             }
         }
         if (!same) {
@@ -457,11 +470,11 @@ int main(int argc, char **argv)
             all |= image1->rect();
             all -= used;
             for (const QRect &rect : all.rects()) {
-                printf("%d,%d+%dx%d\n", rect.x(), rect.y(), rect.width(), rect.height());
+                printf("%s\n", toString(rect).constData());
             }
         }
     } else if (!same) {
-        printf("0,0+%dx%d\n", image1->width(), image1->height());
+        printf("%s\n", toString(image1->rect()).constData());
     }
 
     return 0;
