@@ -257,6 +257,7 @@ void usage(FILE *f)
             "  --verbose|-v                       Be verbose\n"
             "  --range=[range]                    The range?\n"
             "  --min-size=[min-size]              The min-size?\n"
+            "  --same                             Only display the areas that are identical\n"
             "  --threshold=[threshold]            Set threshold value\n");
 }
 
@@ -294,6 +295,7 @@ int main(int argc, char **argv)
     QCoreApplication a(argc, argv);
     std::shared_ptr<Image> image1, image2;
     float threshold = 0;
+    bool same = false;
     int minSize = 10;
     int range = 2;
     for (int i=1; i<argc; ++i) {
@@ -334,6 +336,8 @@ int main(int argc, char **argv)
             }
             if (verbose)
                 qDebug() << "min-size:" << minSize;
+        } else if (arg == "--same") {
+            same = true;
         } else if (arg.startsWith("--range=")) {
             bool ok;
             QString t = arg.mid(11);
@@ -437,10 +441,27 @@ int main(int argc, char **argv)
     if (!matches.isEmpty()) {
         joinChunks(matches);
         for (const auto &match : matches) {
-            printf("%d,%d+%dx%d %d,%d+%dx%d\n",
-                   match.first.x(), match.first.y(), match.first.width(), match.first.height(),
-                   match.second.x(), match.second.y(), match.second.width(), match.second.height());
+            if (match.first.rect() != match.second.rect()) {
+                if (!same) {
+                    printf("%d,%d+%dx%d %d,%d+%dx%d\n",
+                           match.first.x(), match.first.y(), match.first.width(), match.first.height(),
+                           match.second.x(), match.second.y(), match.second.width(), match.second.height());
+                }
+            } else if (same) {
+                printf("%d,%d+%dx%d\n",
+                       match.first.x(), match.first.y(), match.first.width(), match.first.height());
+            }
         }
+        if (!same) {
+            QRegion all;
+            all |= image1->rect();
+            all -= used;
+            for (const QRect &rect : all.rects()) {
+                printf("%d,%d+%dx%d\n", rect.x(), rect.y(), rect.width(), rect.height());
+            }
+        }
+    } else if (!same) {
+        printf("0,0+%dx%d\n", image1->width(), image1->height());
     }
 
     return 0;
