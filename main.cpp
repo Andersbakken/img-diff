@@ -158,20 +158,20 @@ public:
         }
         Q_ASSERT(count > 1);
         const int w = width() / count;
-        // const int wextra = width() - (w * count);
+        const int wextra = width() - (w * count);
         const int h = height() / count;
         if (w < minSize || h < minSize)
             return QVector<Chunk>();
-        // const int hextra = height() - (h * count);
+        const int hextra = height() - (h * count);
         QVector<Chunk> ret(count * count);
         for (int y=0; y<count; ++y) {
             for (int x=0; x<count; ++x) {
-                const QRect r(x * w, y * h, w, h);
+                const QRect r(x * w,
+                              y * h,
+                              w + (x + 1 == count ? wextra : 0),
+                              h + (y + 1 == count ? hextra : 0));
+                // const QRect r(x * w, y * h, w, h);
                 if (!filter.intersects(r)) {
-                    // const QRect r(x * w,
-                    //               y * h,
-                    //               w + (x + 1 == count ? wextra : 0),
-                    //               h + (y + 1 == count ? hextra : 0));
                     ret[(y * count) + x] = chunk(r);
                 }
             }
@@ -473,7 +473,7 @@ int main(int argc, char **argv)
                     qDebug() << "comparing chunks" << chunk << otherChunk;
                 }
 
-                if (chunk == otherChunk) {
+                if (otherChunk.size() == chunk.size() && chunk == otherChunk) {
                     used |= chunk.rect();
                     matches.push_back(std::make_pair(chunk, otherChunk));
                     break;
