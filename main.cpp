@@ -44,7 +44,7 @@ struct Color
         const float b = powf(blue - other.blue, 2);
 
         float distance = sqrtf(r + g + b);
-        const float alphaDistance = std::abs(alpha - other.alpha);
+        const float alphaDistance = abs(alpha - other.alpha);
         // if (verbose >= 2) {
         //     fprintf(stderr, "%s to %s => %f/%f (%f) at %d,%d (%d,%d)\n",
         //             qPrintable(toString()),
@@ -352,6 +352,7 @@ static void joinChunks(QVector<std::pair<Chunk, Chunk> > &chunks)
 int main(int argc, char **argv)
 {
     QCoreApplication a(argc, argv);
+    QImage dump;
     std::shared_ptr<Image> image1, image2;
     float threshold = 0;
     bool same = false;
@@ -459,9 +460,11 @@ int main(int argc, char **argv)
                 return;
             indexes.push_back((yy * count) + xx);
         };
+        add(0, 0);
         for (int y=-range; y<=range; ++y) {
             for (int x=-range; x<=range; ++x) {
-                add(x, y);
+                if (x || y)
+                    add(x, y);
             }
         }
 
@@ -473,6 +476,13 @@ int main(int argc, char **argv)
     QVector<std::pair<Chunk, Chunk> > matches;
     QRegion used;
     int count = 1;
+    QPainter p;
+    if (dumpImages) {
+        dump = QImage(image1->size(), QImage::Format_ARGB32_Premultiplied);
+        dump.fill(qRgba(255, 255, 255, 255));
+        p.begin(&dump);
+        p.setPen(Qt::black);
+    }
     while (true) {
         const QVector<Chunk> chunks1 = image1->chunks(count, used);
         if (chunks1.isEmpty())
@@ -493,6 +503,15 @@ int main(int argc, char **argv)
                 if (otherChunk.size() == chunk.size() && chunk == otherChunk) {
                     used |= chunk.rect();
                     matches.push_back(std::make_pair(chunk, otherChunk));
+                    if (dumpImages) {
+                        if (chunk.rect() == otherChunk.rect()) {
+                            p.fillRect(chunk.rect(), Qt::green);
+                            p.drawRect(chunk.rect());
+                            // p.drawText(chunk.rect(), Qt::AlignCenter, QString
+                        } else {
+                            p.fillRect(chunk.rect(), Qt::yellow);
+                        }
+                    }
                     break;
                 }
             }
@@ -505,6 +524,17 @@ int main(int argc, char **argv)
             joinChunks(matches);
         int i = 0;
         for (const auto &match : matches) {
+            if (verbose) {
+                QString str;
+                QDebug dbg(&str);
+                dbg << "Match" << i << match.first.rect();
+                if (match.first.rect() == match.second.rect()) {
+                    dbg << "SAME";
+                } else {
+                    dbg << "FOUND AT" << match.second.rect();
+                }
+                fprintf(stderr, "%s\n", qPrintable(str));
+            }
             if (dumpImages) {
                 char buf[1024];
                 snprintf(buf, sizeof(buf), "/tmp/img-sub_%04d_%s_a%s.png", i, toString(match.first.rect()).constData(),

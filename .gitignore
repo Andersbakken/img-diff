@@ -4,3 +4,11 @@
 /.gdb_history
 /.gdb_brestore
 /.obj
+/rules.ninja
+/compile_commands.json
+/cmake_install.cmake
+/build.ninja
+/.ninja_deps
+/.ninja_log
+/CMakeCache.txt
+/CMakeFiles/
