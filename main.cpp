@@ -340,7 +340,7 @@ static void joinChunks(QVector<std::pair<Chunk, Chunk> > &chunks)
                     chunk.adopt(maybeChunk);
                     otherChunk.adopt(chunks.at(j).second);
                     chunks.remove(j, 1);
-                    // if (verbose)
+                    if (verbose)
                         qDebug() << "chunk" << i << chunk.rect() << "was joined with chunk" << j << maybeChunk.rect();
                     break;
                 }
@@ -527,7 +527,7 @@ int main(int argc, char **argv)
             joinChunks(matches);
         int i = 0;
         for (const auto &match : matches) {
-            if (verbose || 1) {
+            if (verbose) {
                 QString str;
                 QDebug dbg(&str);
                 dbg << "Match" << i << toString(match.first.rect()) << (match.first.flags() & Chunk::AllTransparent ? "transparent" : "");
