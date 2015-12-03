@@ -565,7 +565,7 @@ int main(int argc, char **argv)
             }
             if (match.first.rect() != match.second.rect()) {
                 if (!same) {
-                    printf("%s %s\n", toString(match.first.rect()).constData(), toString(match.second.rect()).constData());
+                    printf("%s %s\n", toString(match.second.rect()).constData(), toString(match.first.rect()).constData());
                 }
             } else if (same) {
                 printf("%s\n", toString(match.first.rect()).constData());
