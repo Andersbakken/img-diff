@@ -349,6 +349,15 @@ static void joinChunks(QVector<std::pair<Chunk, Chunk> > &chunks)
     } while (modified);
 }
 
+inline bool operator<(const QPoint &l, const QPoint &r)
+{
+    if (l.y() < r.y())
+        return true;
+    if (l.y() == r.y())
+        return l.x() < r.x();
+    return false;
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication a(argc, argv);
@@ -481,8 +490,12 @@ int main(int argc, char **argv)
         dump = QImage(image1->size(), QImage::Format_ARGB32_Premultiplied);
         dump.fill(qRgba(255, 255, 255, 255));
         p.begin(&dump);
+        QFont f;
+        f.setPixelSize(8);
+        p.setFont(f);
         p.setPen(Qt::black);
     }
+    QMap<QPoint, QString> texts;
     while (true) {
         const QVector<Chunk> chunks1 = image1->chunks(count, used);
         if (chunks1.isEmpty())
@@ -507,9 +520,12 @@ int main(int argc, char **argv)
                         if (chunk.rect() == otherChunk.rect()) {
                             p.fillRect(chunk.rect(), Qt::green);
                             p.drawRect(chunk.rect());
-                            // p.drawText(chunk.rect(), Qt::AlignCenter, QString
+                            // p.drawText(chunk.rect().topLeft() + QPoint(2, 10),
+                            //            toString(chunk.rect()) + "\ndid not move");
                         } else {
                             p.fillRect(chunk.rect(), Qt::yellow);
+                            p.drawRect(chunk.rect());
+                            texts[chunk.rect().topLeft() + QPoint(2, 10)] = toString(otherChunk.rect()) + " moved to " + toString(chunk.rect());
                         }
                     }
                     break;
@@ -518,6 +534,13 @@ int main(int argc, char **argv)
         }
 
         ++count;
+    }
+    if (dumpImages) {
+        p.setPen(Qt::blue);
+        // qDebug() << texts;
+        for (QMap<QPoint, QString>::const_iterator it = texts.begin(); it != texts.end(); ++it) {
+            p.drawText(it.key(), it.value());
+        }
     }
     if (!matches.isEmpty()) {
         if (!nojoin)
@@ -567,6 +590,10 @@ int main(int argc, char **argv)
         }
     } else if (!same) {
         printf("%s\n", toString(image1->rect()).constData());
+    }
+    if (dumpImages) {
+        p.end();
+        dump.save("/tmp/img-sub.png");
     }
 
     return 0;
