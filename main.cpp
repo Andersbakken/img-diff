@@ -340,8 +340,8 @@ static void joinChunks(QVector<std::pair<Chunk, Chunk> > &chunks)
                     chunk.adopt(maybeChunk);
                     otherChunk.adopt(chunks.at(j).second);
                     chunks.remove(j, 1);
-                    if (verbose)
-                        qDebug() << "chunk" << i << chunk.rect() << "is aligned with chunk" << j << maybeChunk.rect();
+                    // if (verbose)
+                        qDebug() << "chunk" << i << chunk.rect() << "was joined with chunk" << j << maybeChunk.rect();
                     break;
                 }
             }
@@ -360,9 +360,9 @@ inline bool operator<(const QPoint &l, const QPoint &r)
 
 int main(int argc, char **argv)
 {
-    QCoreApplication a(argc, argv);
+    QApplication a(argc, argv);
     QImage dump;
-    std::shared_ptr<Image> image1, image2;
+    std::shared_ptr<Image> oldImage, newImage;
     float threshold = 0;
     bool same = false;
     bool nojoin = false;
@@ -425,15 +425,15 @@ int main(int argc, char **argv)
             }
             if (verbose)
                 qDebug() << "range:" << range;
-        } else if (!image1) {
-            image1 = Image::load(arg);
-            if (!image1) {
+        } else if (!oldImage) {
+            oldImage = Image::load(arg);
+            if (!oldImage) {
                 fprintf(stderr, "Failed to decode %s\n", qPrintable(arg));
                 return 1;
             }
-        } else if (!image2) {
-            image2 = Image::load(arg);
-            if (!image2) {
+        } else if (!newImage) {
+            newImage = Image::load(arg);
+            if (!newImage) {
                 fprintf(stderr, "Failed to decode %s\n", qPrintable(arg));
                 return 1;
             }
@@ -443,16 +443,16 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-    if (!image2) {
+    if (!newImage) {
         usage(stderr);
         fprintf(stderr, "Not enough args\n");
         return 1;
     }
 
-    if (image1->size() != image2->size()) {
+    if (oldImage->size() != newImage->size()) {
         fprintf(stderr, "Images have different sizes: %dx%d vs %dx%d\n",
-                image1->width(), image1->height(),
-                image2->width(), image2->height());
+                oldImage->width(), oldImage->height(),
+                newImage->width(), newImage->height());
         return 1;
     }
 
@@ -487,47 +487,34 @@ int main(int argc, char **argv)
     int count = 1;
     QPainter p;
     if (dumpImages) {
-        dump = QImage(image1->size(), QImage::Format_ARGB32_Premultiplied);
-        dump.fill(qRgba(255, 255, 255, 255));
+        dump = newImage->image();
         p.begin(&dump);
-        QFont f;
-        f.setPixelSize(8);
-        p.setFont(f);
+        p.setOpacity(.3);
+        p.drawImage(0, 0, oldImage->image());
+        p.setOpacity(.5);
         p.setPen(Qt::black);
     }
     QMap<QPoint, QString> texts;
     while (true) {
-        const QVector<Chunk> chunks1 = image1->chunks(count, used);
-        if (chunks1.isEmpty())
+        const QVector<Chunk> newChunks = newImage->chunks(count, used);
+        if (newChunks.isEmpty())
             break;
-        const QVector<Chunk> chunks2 = image2->chunks(count);
-        for (int i=0; i<chunks1.size(); ++i) {
-            const Chunk &chunk = chunks1.at(i);
-            if (chunk.isNull())
+        const QVector<Chunk> oldChunks = oldImage->chunks(count);
+        for (int i=0; i<newChunks.size(); ++i) {
+            const Chunk &newChunk = newChunks.at(i);
+            if (newChunk.isNull())
                 continue;
-            Q_ASSERT(chunk.width() >= minSize && chunk.height() >= minSize);
+            Q_ASSERT(newChunk.width() >= minSize && newChunk.height() >= minSize);
 
             for (int idx : chunkIndexes(count, i)) {
-                const Chunk &otherChunk = chunks2.at(idx);
+                const Chunk &oldChunk = oldChunks.at(idx);
                 if (verbose >= 2) {
-                    qDebug() << "comparing chunks" << chunk << otherChunk;
+                    qDebug() << "comparing chunks" << newChunk << oldChunk;
                 }
 
-                if (otherChunk.size() == chunk.size() && chunk == otherChunk) {
-                    used |= chunk.rect();
-                    matches.push_back(std::make_pair(chunk, otherChunk));
-                    if (dumpImages) {
-                        if (chunk.rect() == otherChunk.rect()) {
-                            p.fillRect(chunk.rect(), Qt::green);
-                            p.drawRect(chunk.rect());
-                            // p.drawText(chunk.rect().topLeft() + QPoint(2, 10),
-                            //            toString(chunk.rect()) + "\ndid not move");
-                        } else {
-                            p.fillRect(chunk.rect(), Qt::yellow);
-                            p.drawRect(chunk.rect());
-                            texts[chunk.rect().topLeft() + QPoint(2, 10)] = toString(otherChunk.rect()) + " moved to " + toString(chunk.rect());
-                        }
-                    }
+                if (oldChunk.size() == newChunk.size() && newChunk == oldChunk) {
+                    used |= newChunk.rect();
+                    matches.push_back(std::make_pair(newChunk, oldChunk));
                     break;
                 }
             }
@@ -535,41 +522,46 @@ int main(int argc, char **argv)
 
         ++count;
     }
-    if (dumpImages) {
-        p.setPen(Qt::blue);
-        // qDebug() << texts;
-        for (QMap<QPoint, QString>::const_iterator it = texts.begin(); it != texts.end(); ++it) {
-            p.drawText(it.key(), it.value());
-        }
-    }
     if (!matches.isEmpty()) {
         if (!nojoin)
             joinChunks(matches);
         int i = 0;
         for (const auto &match : matches) {
-            if (verbose) {
+            if (verbose || 1) {
                 QString str;
                 QDebug dbg(&str);
-                dbg << "Match" << i << match.first.rect();
+                dbg << "Match" << i << toString(match.first.rect()) << (match.first.flags() & Chunk::AllTransparent ? "transparent" : "");
                 if (match.first.rect() == match.second.rect()) {
                     dbg << "SAME";
                 } else {
-                    dbg << "FOUND AT" << match.second.rect();
+                    dbg << "FOUND AT" << toString(match.second.rect());
                 }
                 fprintf(stderr, "%s\n", qPrintable(str));
             }
             if (dumpImages) {
-                char buf[1024];
-                snprintf(buf, sizeof(buf), "/tmp/img-sub_%04d_%s_a%s.png", i, toString(match.first.rect()).constData(),
-                         match.first.flags() & Chunk::AllTransparent ? "_alpha" : "");
-                match.first.save(buf);
-                if (verbose)
-                    fprintf(stderr, "Dumped %s\n", buf);
-                snprintf(buf, sizeof(buf), "/tmp/img-sub_%04d_%s_b%s.png", i, toString(match.second.rect()).constData(),
-                         match.second.flags() & Chunk::AllTransparent ? "_alpha" : "");
-                match.second.save(buf);
-                if (verbose)
-                    fprintf(stderr, "Dumped %s\n", buf);
+                /* char buf[1024]; */
+                /* snprintf(buf, sizeof(buf), "/tmp/img-sub_%04d_%s_a%s.png", i, toString(match.first.rect()).constData(), */
+                /*          match.first.flags() & Chunk::AllTransparent ? "_alpha" : ""); */
+                /* match.first.save(buf); */
+                /* if (verbose) */
+                /*     fprintf(stderr, "Dumped %s\n", buf); */
+                /* snprintf(buf, sizeof(buf), "/tmp/img-sub_%04d_%s_b%s.png", i, toString(match.second.rect()).constData(), */
+                /*          match.second.flags() & Chunk::AllTransparent ? "_alpha" : ""); */
+                /* match.second.save(buf); */
+                /* if (verbose) */
+                /*     fprintf(stderr, "Dumped %s\n", buf); */
+
+                if (match.first.rect() == match.second.rect()) {
+                    // p.fillRect(match.first.rect(), Qt::green);
+                    // p.drawRect(match.first.rect());
+                    // p.drawText(chunk.rect().topLeft() + QPoint(2, 10),
+                    //            toString(chunk.rect()) + "\ndid not move");
+                } else {
+                    p.fillRect(match.first.rect(), Qt::yellow);
+                    p.drawRect(match.first.rect());
+                    texts[match.first.rect().topLeft() + QPoint(2, 10)] = toString(match.second.rect()) + " moved to " + toString(match.first.rect());
+                }
+
             }
             if (match.first.rect() != match.second.rect()) {
                 if (!same) {
@@ -580,18 +572,33 @@ int main(int argc, char **argv)
             }
             ++i;
         }
+        QRegion all;
+        all |= oldImage->rect();
+        all -= used;
+        if (dumpImages) {
+            for (const QRect &r : all.rects()) {
+                p.fillRect(r, Qt::green);
+                p.drawRect(r);
+            }
+        }
         if (!same) {
-            QRegion all;
-            all |= image1->rect();
-            all -= used;
             for (const QRect &rect : all.rects()) {
                 printf("%s\n", toString(rect).constData());
             }
         }
     } else if (!same) {
-        printf("%s\n", toString(image1->rect()).constData());
+        printf("%s\n", toString(oldImage->rect()).constData());
     }
     if (dumpImages) {
+        p.setOpacity(1);
+        QFont f;
+        f.setPixelSize(8);
+        p.setFont(f);
+        p.setPen(Qt::blue);
+        // qDebug() << texts;
+        for (QMap<QPoint, QString>::const_iterator it = texts.begin(); it != texts.end(); ++it) {
+            p.drawText(it.key(), it.value());
+        }
         p.end();
         dump.save("/tmp/img-sub.png");
     }
